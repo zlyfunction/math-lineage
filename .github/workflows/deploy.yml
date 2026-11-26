@@ -1,0 +1,85 @@
+name: Deploy MathLineage to GitHub Pages
+
+on:
+  push:
+    branches: ["main"]
+  schedule:
+    # Weekly incremental harvest of new verified Ph.D. dissertations (Sundays 04:00 UTC)
+    - cron: "0 4 * * 0"
+  workflow_dispatch:
+    inputs:
+      run_harvest:
+        description: "Run incremental dissertation harvest before deploying?"
+        type: boolean
+        default: true
+
+permissions:
+  contents: write
+  pages: write
+  id-token: write
+
+concurrency:
+  group: "pages"
+  cancel-in-progress: false
+
+jobs:
+  build-and-deploy:
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        if: github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.run_harvest == true)
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Run incremental verified dissertation harvest
+        if: github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.run_harvest == true)
+        run: |
+          pip install -r backend/requirements.txt
+          python3 -c "
+          import sys
+          sys.path.insert(0, 'backend')
+          from app.ingest import run_harvest
+          for src in ['nyu_courant', 'hal', 'theses_fr', 'mit_dspace', 'datacite']:
+              try:
+                  print(src, run_harvest(src, '', 30))
+              except Exception as e:
+                  print(src, 'WARN:', e)
+          "
+          python3 backend/scripts/export_static_bundle.py
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          if ! git diff --quiet frontend/public/data/genealogy-bundle.json data/genealogy.db; then
+            git add frontend/public/data/genealogy-bundle.json data/genealogy.db
+            git commit -m "chore: weekly verified dissertation harvest"
+            git push
+          fi
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Build Frontend SPA
+        working-directory: frontend
+        run: |
+          npm install
+          npm run build
+
+      - name: Configure Pages
+        uses: actions/configure-pages@v5
+
+      - name: Upload Pages Artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: frontend/dist
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4

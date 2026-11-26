@@ -55,8 +55,8 @@ jobs:
           python3 backend/scripts/export_static_bundle.py
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          if ! git diff --quiet frontend/public/data/genealogy-bundle.json data/genealogy.db; then
-            git add frontend/public/data/genealogy-bundle.json data/genealogy.db
+          if ! git diff --quiet frontend/public/data/genealogy-bundle.json; then
+            git add frontend/public/data/genealogy-bundle.json
             git commit -m "chore: weekly verified dissertation harvest"
             git push
           fi

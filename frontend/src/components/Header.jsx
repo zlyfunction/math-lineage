@@ -10,8 +10,8 @@ export function VerificationBadge({ status, repo }) {
   }
   if (status === "historical_wikidata") {
     return (
-      <span className="badge badge-historical" title="Historical lineage seeded from Wikidata (P549 MGP ID / P184)">
-        历史谱系底座 · Wikidata
+      <span className="badge badge-historical" title="Historical lineage synced from Mathematics Genealogy Project & Wikidata">
+        MGP / Wikidata 历史谱系
       </span>
     );
   }

@@ -126,6 +126,11 @@ export default function ScholarDetail({ scholarId, onSelectScholar, onBack, onOp
           {scholar.university && <span>{scholar.university}</span>}
           {scholar.country && <span>{scholar.country}</span>}
           {scholar.year && <span className="mono">{scholar.year}</span>}
+          {scholar.msc_code && (
+            <span className="mono" style={{ color: "var(--accent-oxford)" }}>
+              MSC {scholar.msc_code}{scholar.msc_label ? ` — ${scholar.msc_label}` : ""}
+            </span>
+          )}
           {scholar.bio_summary && <span style={{ color: "var(--ink-muted)" }}>— {scholar.bio_summary}</span>}
         </div>
 
@@ -276,7 +281,11 @@ export default function ScholarDetail({ scholarId, onSelectScholar, onBack, onOp
                       {adv.name} {adv.name_zh ? `(${adv.name_zh})` : ""}
                     </button>
                     <span className={`badge ${adv.source_type === "dissertation_verified" ? "badge-verified" : "badge-historical"}`}>
-                      {adv.source_type === "dissertation_verified" ? "✓ 论文实证" : "Wikidata P184"}
+                      {adv.source_type === "dissertation_verified"
+                        ? "✓ 论文实证"
+                        : adv.source_type === "mgp_official"
+                        ? "MGP 原站谱系"
+                        : "Wikidata P184"}
                     </span>
                   </div>
                   <div style={{ fontSize: "0.82rem", color: "var(--ink-secondary)", marginTop: 4 }}>

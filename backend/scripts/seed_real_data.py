@@ -21,6 +21,7 @@ def main() -> None:
 
     # Harvest real, verified PhD dissertations from 4 distinct institutional/national APIs
     harvest_jobs = [
+        ("nyu_courant", "", 50, 0),
         ("hal", "", 60, 0),
         ("hal", "Villani OR Lions OR Brezis OR Tao OR geometry OR PDE", 30, 0),
         ("theses_fr", "", 50, 0),

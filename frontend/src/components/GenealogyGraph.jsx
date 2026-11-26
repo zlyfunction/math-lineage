@@ -181,7 +181,7 @@ export default function GenealogyGraph({ graph, onSelectScholar, ancestorDepth, 
             </span>
             <span>
               <span className="legend-dot" style={{ background: "#C98D3B" }} />
-              历史谱系 Wikidata
+              MGP / Wikidata 历史谱系
             </span>
             <span>
               <span className="legend-dot" style={{ background: "#A39B8F" }} />

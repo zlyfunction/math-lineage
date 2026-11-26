@@ -3,6 +3,7 @@ __pycache__/
 .DS_Store
 frontend/node_modules/
 frontend/dist/
+data/*.db
 data/genealogy.db-shm
 data/genealogy.db-wal
 .env

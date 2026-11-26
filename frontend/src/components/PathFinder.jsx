@@ -224,7 +224,11 @@ export default function PathFinder({ initialFrom, onSelectScholar }) {
                             {step.relation === "advised" ? "↓ 指导博士生 (advised)" : "↑ 师从博士导师 (advised by)"}
                           </span>
                           <span className={`badge ${step.source_type === "dissertation_verified" ? "badge-verified" : "badge-historical"}`}>
-                            {step.source_type === "dissertation_verified" ? "✓ 官方论文实证" : "Wikidata P184"}
+                            {step.source_type === "dissertation_verified"
+                              ? "✓ 官方论文实证"
+                              : step.source_type === "mgp_official"
+                              ? "MGP 原站谱系"
+                              : "Wikidata P184"}
                           </span>
                           {step.dissertation?.landing_url && (
                             <a href={step.dissertation.landing_url} target="_blank" rel="noreferrer">

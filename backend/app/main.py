@@ -15,7 +15,7 @@ from fastapi.staticfiles import StaticFiles
 
 from .database import PROJECT_ROOT, get_conn, init_db, rebuild_fts
 from .graph import compute_all_descendant_counts, count_descendants, find_shortest_path, get_lineage_subgraph
-from .ingest import ingest_verified_dissertation, run_harvest
+from .ingest import ingest_mgp_sync, ingest_verified_dissertation, run_harvest
 from .models import (
     HarvestRequest,
     LiveRepoSearchRequest,
@@ -524,6 +524,15 @@ async def trigger_harvest(req: HarvestRequest) -> Dict[str, Any]:
         return await asyncio.to_thread(run_harvest, req.source, req.query, req.limit)
     except Exception as exc:
         raise HTTPException(status_code=502, detail=f"Harvest from {req.source} failed: {exc}")
+
+
+@app.post("/api/mgp/sync/{mgp_id}")
+async def sync_mgp_lineage(mgp_id: str) -> Dict[str, Any]:
+    """Politely fetch a scholar and their complete upward advisor chain from MGP."""
+    try:
+        return await asyncio.to_thread(ingest_mgp_sync, [mgp_id], {mgp_id}, 80)
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"MGP sync failed: {exc}")
 
 
 # Serve built Vite SPA if present

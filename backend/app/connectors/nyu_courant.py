@@ -174,7 +174,7 @@ def fetch_nyu_courant_phds(
             adv_m = re.search(r"<strong>Advisor\(s\):</strong>(.*?)</p>", block, re.S | re.I)
             if adv_m:
                 adv_text = _strip_tags(adv_m.group(1))
-                for part in re.split(r"\s*,\s*|\s+and\s+|\s*;\s*", adv_text):
+                for part in re.split(r"\s*[,;/]\s*|\s+and\s+", adv_text):
                     cleaned = clean_person_name(part)
                     if cleaned and len(cleaned.split()) >= 2 and cleaned.lower() != scholar_name.lower():
                         advisors.append(cleaned)

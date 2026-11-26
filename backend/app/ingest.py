@@ -8,6 +8,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from .connectors.datacite import fetch_datacite_math_dissertations
 from .connectors.hal import fetch_hal_math_theses
+from .connectors.mgp import crawl_mgp_ancestors_complete
 from .connectors.mit_dspace import fetch_mit_math_theses
 from .connectors.nyu_courant import fetch_nyu_courant_phds
 from .connectors.theses_fr import fetch_theses_fr_math
@@ -391,6 +392,125 @@ def ingest_wikidata_ancestors(start_qids: List[str], max_depth: int = 12) -> Dic
                     added_edges += 1
         rebuild_fts(conn)
     return {"fetched": len(scholars), "added_scholars": added_scholars, "added_edges": added_edges}
+
+
+def ingest_mgp_sync(
+    start_mgp_ids: List[str],
+    include_students_for: Optional[set[str]] = None,
+    max_pages: int = 260,
+) -> Dict[str, Any]:
+    """Sync complete upward ancestor chains & metadata faithfully from the original MGP."""
+    records = crawl_mgp_ancestors_complete(
+        start_mgp_ids,
+        include_students_for=include_students_for,
+        max_pages=max_pages,
+    )
+    added_scholars = 0
+    updated_scholars = 0
+    added_edges = 0
+
+    with get_conn() as conn:
+        mgp_to_id: Dict[str, int] = {}
+
+        # Pass 1: Upsert every fetched MGP scholar
+        for mid, rec in records.items():
+            sid, created = find_or_create_scholar(
+                conn,
+                rec["name"],
+                mgp_id=mid,
+                degree=rec.get("degree") or "Ph.D.",
+                university=rec.get("university") or "",
+                country=rec.get("country") or "",
+                year=rec.get("year"),
+                thesis_title=rec.get("thesis_title") or "",
+                msc_code=rec.get("msc_code") or "",
+                msc_label=rec.get("msc_label") or "",
+                verification_status="historical_wikidata",
+            )
+            mgp_to_id[mid] = sid
+            if created:
+                added_scholars += 1
+            else:
+                # Ensure MGP's exact Ph.D. degree/university/country/MSC/year/thesis overwrite inferred defaults
+                conn.execute(
+                    """
+                    UPDATE scholars SET
+                        mgp_id = COALESCE(mgp_id, ?),
+                        degree = CASE WHEN ? != '' AND verification_status != 'verified_dissertation' THEN ? ELSE degree END,
+                        university = CASE WHEN ? != '' AND verification_status != 'verified_dissertation' THEN ? ELSE university END,
+                        country = CASE WHEN ? != '' AND verification_status != 'verified_dissertation' THEN ? ELSE country END,
+                        year = CASE WHEN ? IS NOT NULL AND verification_status != 'verified_dissertation' THEN ? ELSE COALESCE(year, ?) END,
+                        thesis_title = CASE WHEN thesis_title = '' THEN ? ELSE thesis_title END,
+                        msc_code = CASE WHEN msc_code = '' THEN ? ELSE msc_code END,
+                        msc_label = CASE WHEN msc_label = '' THEN ? ELSE msc_label END,
+                        updated_at = datetime('now')
+                    WHERE id = ?
+                    """,
+                    (
+                        mid,
+                        rec.get("degree") or "",
+                        rec.get("degree") or "Ph.D.",
+                        rec.get("university") or "",
+                        rec.get("university") or "",
+                        rec.get("country") or "",
+                        rec.get("country") or "",
+                        rec.get("year"),
+                        rec.get("year"),
+                        rec.get("year"),
+                        rec.get("thesis_title") or "",
+                        rec.get("msc_code") or "",
+                        rec.get("msc_label") or "",
+                        sid,
+                    ),
+                )
+                updated_scholars += 1
+
+        # Pass 2: Wire every advisor -> student edge faithfully
+        for mid, rec in records.items():
+            stu_id = mgp_to_id.get(mid)
+            if not stu_id:
+                continue
+            for adv in rec.get("advisors", []):
+                aid = adv["mgp_id"]
+                adv_id = mgp_to_id.get(aid)
+                if not adv_id:
+                    adv_id, c2 = find_or_create_scholar(
+                        conn,
+                        adv["name"],
+                        mgp_id=aid,
+                        verification_status="historical_wikidata",
+                    )
+                    mgp_to_id[aid] = adv_id
+                    if c2:
+                        added_scholars += 1
+                if adv_id != stu_id:
+                    cur = conn.execute(
+                        """
+                        INSERT OR IGNORE INTO advisor_edges (advisor_id, student_id, source_type, confidence)
+                        VALUES (?, ?, 'mgp_official', 1.0)
+                        """,
+                        (adv_id, stu_id),
+                    )
+                    if cur.rowcount > 0:
+                        added_edges += 1
+
+        conn.execute(
+            """
+            INSERT INTO harvest_runs (
+                source_repo, query, fetched_count, added_scholars, added_dissertations,
+                added_edges, skipped_unverified, status
+            ) VALUES ('MGP Reference', 'Complete Upward Advisor Closure', ?, ?, 0, ?, 0, 'completed')
+            """,
+            (len(records), added_scholars, added_edges),
+        )
+        rebuild_fts(conn)
+
+    return {
+        "fetched_pages": len(records),
+        "added_scholars": added_scholars,
+        "updated_scholars": updated_scholars,
+        "added_edges": added_edges,
+    }
 
 
 def run_harvest(source: str, query: str = "", limit: int = 35, page: int = 0) -> Dict[str, Any]:

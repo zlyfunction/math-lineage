@@ -3,7 +3,6 @@ import { api } from "./api";
 import Header from "./components/Header";
 import HomeSearch from "./components/HomeSearch";
 import PathFinder from "./components/PathFinder";
-import ReviewPipeline from "./components/ReviewPipeline";
 import ScholarDetail from "./components/ScholarDetail";
 import VerifySubmit from "./components/VerifySubmit";
 
@@ -14,8 +13,7 @@ function parseHash() {
     if (!Number.isNaN(id) && id > 0) return { page: "scholar", id };
   }
   if (h === "path") return { page: "path" };
-  if (h === "verify") return { page: "verify" };
-  if (h === "review") return { page: "review" };
+  if (h === "verify" || h === "submit" || h === "review") return { page: "verify" };
   return { page: "home" };
 }
 
@@ -65,7 +63,6 @@ export default function App() {
             <HomeSearch
               stats={stats}
               onSelectScholar={(id) => navigate("scholar", id)}
-              onNavigate={(p) => navigate(p)}
             />
           )}
 
@@ -94,28 +91,15 @@ export default function App() {
               onSelectScholar={(id) => navigate("scholar", id)}
             />
           )}
-
-          {route.page === "review" && (
-            <ReviewPipeline
-              onDataChanged={loadStats}
-              onSelectScholar={(id) => navigate("scholar", id)}
-            />
-          )}
         </div>
       </main>
 
-      <footer className="site-footer">
-        <div className="container footer-inner">
-          <div>
-            <strong>MathLineage</strong> · Rebuilt Open Mathematics Genealogy — 每条新增记录均强制溯源至公开可检索的官方博士论文。
-            {" "}
-            <a href="https://github.com/zlyfunction/math-lineage" target="_blank" rel="noreferrer">
-              GitHub 开源仓库 ↗
-            </a>
-          </div>
-          <div className="mono" style={{ fontSize: "0.76rem" }}>
-            Sources: Wikidata (P549/P184) · NYU Courant · MIT DSpace · HAL/TEL · theses.fr · DataCite
-          </div>
+      <footer className="colophon">
+        <div className="container">
+          The Mathematics Genealogy · Verified against official doctoral dissertations ·{" "}
+          <a href="https://github.com/zlyfunction/math-lineage" target="_blank" rel="noreferrer">
+            GitHub
+          </a>
         </div>
       </footer>
     </div>

@@ -1,14 +1,13 @@
 import React, { useEffect, useState } from "react";
 import { api } from "../api";
 import GenealogyGraph from "./GenealogyGraph";
-import { VerificationBadge } from "./Header";
 
 export default function ScholarDetail({ scholarId, onSelectScholar, onBack, onOpenPathWith }) {
   const [detail, setDetail] = useState(null);
   const [graph, setGraph] = useState(null);
   const [ancestorDepth, setAncestorDepth] = useState(6);
   const [descendantDepth, setDescendantDepth] = useState(2);
-  const [showRawJson, setShowRawJson] = useState(false);
+  const [showMeta, setShowMeta] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
 
@@ -16,7 +15,7 @@ export default function ScholarDetail({ scholarId, onSelectScholar, onBack, onOp
     let active = true;
     setLoading(true);
     setError("");
-    setShowRawJson(false);
+    setShowMeta(false);
 
     Promise.all([
       api.getScholar(scholarId),
@@ -41,48 +40,70 @@ export default function ScholarDetail({ scholarId, onSelectScholar, onBack, onOp
 
   if (loading && !detail) {
     return (
-      <div className="surface-card" style={{ padding: 48, textAlign: "center", color: "var(--ink-muted)" }}>
-        正在加载学者档案与师承图谱…
+      <div style={{ padding: 48, textAlign: "center", fontStyle: "italic", color: "var(--ink-muted)" }}>
+        Unrolling lineage scroll…
       </div>
     );
   }
 
   if (error || !detail) {
     return (
-      <div className="surface-card" style={{ padding: 32 }}>
-        <div className="alert-box alert-error">{error || "未找到该学者记录"}</div>
-        <button className="btn" onClick={onBack}>← 返回检索列表</button>
+      <div className="parchment-panel">
+        <div className="notice notice-err">{error || "Scholar record not found."}</div>
+        <button className="btn btn-xs" onClick={onBack}>← Back to Index</button>
       </div>
     );
   }
 
   const { scholar, dissertations, advisors, students, direct_students_count, total_descendants_count } = detail;
+  const primaryDiss = dissertations[0] || null;
+  const thesisTitle = primaryDiss?.title || scholar.thesis_title;
 
   return (
     <div>
-      <div className="back-bar" style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 10 }}>
-        <button className="btn btn-sm" onClick={onBack} id="btn-back-directory">
-          ← 返回学者检索
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14, gap: 10, flexWrap: "wrap" }}>
+        <button className="btn btn-xs" onClick={onBack} id="btn-back-directory">
+          ← Index
         </button>
-        <button
-          className="btn btn-sm"
-          onClick={() => onOpenPathWith(scholar)}
-          id="btn-trace-path-from-scholar"
-        >
-          查找与另一位学者的最短学术路径 →
+        <button className="btn btn-xs" onClick={() => onOpenPathWith(scholar)} id="btn-trace-path-from-scholar">
+          Trace Lineage Path →
         </button>
       </div>
 
-      {/* Scholar Profile Header */}
-      <section className="profile-header-card">
-        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
-          <VerificationBadge
-            status={scholar.verification_status}
-            repo={dissertations[0]?.source_repo}
-          />
+      {/* Engraved Scholar Plate */}
+      <section className="scholar-plate">
+        <h1 className="plate-name">{scholar.name}</h1>
+
+        <div className="plate-degree">
+          {scholar.degree || "Ph.D."}
+          {scholar.university ? ` · ${scholar.university}` : ""}
+          {scholar.country ? `, ${scholar.country}` : ""}
+          {scholar.year ? ` · ${scholar.year}` : ""}
+        </div>
+
+        {scholar.msc_code && (
+          <div className="plate-msc">
+            MSC {scholar.msc_code}{scholar.msc_label ? ` — ${scholar.msc_label}` : ""}
+          </div>
+        )}
+
+        {thesisTitle && (
+          <div className="plate-thesis">“{thesisTitle}”</div>
+        )}
+
+        <div className="plate-links">
+          {primaryDiss && (
+            <a href={primaryDiss.landing_url} target="_blank" rel="noreferrer" className="verified-mark">
+              ✦ Official Thesis ({primaryDiss.source_repo}) ↗
+            </a>
+          )}
+          {primaryDiss?.pdf_url && primaryDiss.pdf_url !== primaryDiss.landing_url && (
+            <a href={primaryDiss.pdf_url} target="_blank" rel="noreferrer">
+              PDF ↗
+            </a>
+          )}
           {scholar.mgp_id && (
             <a
-              className="badge badge-repo"
               href={`https://www.genealogy.math.ndsu.nodak.edu/id.php?id=${scholar.mgp_id}`}
               target="_blank"
               rel="noreferrer"
@@ -90,73 +111,34 @@ export default function ScholarDetail({ scholarId, onSelectScholar, onBack, onOp
               MGP #{scholar.mgp_id} ↗
             </a>
           )}
-          {scholar.wikidata_id && (
-            <a
-              className="badge badge-repo"
-              href={`https://www.wikidata.org/wiki/${scholar.wikidata_id}`}
-              target="_blank"
-              rel="noreferrer"
-            >
-              Wikidata {scholar.wikidata_id} ↗
-            </a>
-          )}
           {scholar.orcid && (
-            <a
-              className="badge badge-repo"
-              href={`https://orcid.org/${scholar.orcid}`}
-              target="_blank"
-              rel="noreferrer"
-            >
-              ORCID {scholar.orcid} ↗
+            <a href={`https://orcid.org/${scholar.orcid}`} target="_blank" rel="noreferrer">
+              ORCID ↗
             </a>
           )}
+          {primaryDiss && (
+            <button className="text-link-btn" style={{ fontSize: "0.86rem", color: "var(--ink-muted)" }} onClick={() => setShowMeta((v) => !v)}>
+              {showMeta ? "Hide Record" : "Source Record"}
+            </button>
+          )}
         </div>
 
-        <h1 className="profile-title">
-          {scholar.name}
-          {scholar.name_zh && (
-            <span style={{ fontSize: "1.3rem", fontWeight: 400, color: "var(--ink-muted)", marginLeft: 12 }}>
-              {scholar.name_zh}
-            </span>
-          )}
-        </h1>
+        {showMeta && primaryDiss && (
+          <pre className="metadata-pre">
+            {JSON.stringify(primaryDiss.raw_metadata || { source: primaryDiss.source_repo, id: primaryDiss.source_record_id }, null, 2)}
+          </pre>
+        )}
 
-        <div className="profile-submeta">
-          <span><strong>{scholar.degree || "Ph.D."}</strong></span>
-          {scholar.university && <span>{scholar.university}</span>}
-          {scholar.country && <span>{scholar.country}</span>}
-          {scholar.year && <span className="mono">{scholar.year}</span>}
-          {scholar.msc_code && (
-            <span className="mono" style={{ color: "var(--accent-oxford)" }}>
-              MSC {scholar.msc_code}{scholar.msc_label ? ` — ${scholar.msc_label}` : ""}
-            </span>
-          )}
-          {scholar.bio_summary && <span style={{ color: "var(--ink-muted)" }}>— {scholar.bio_summary}</span>}
-        </div>
-
-        <div className="profile-kpis">
-          <div className="kpi-item">
-            <span className="kpi-num">{advisors.length}</span>
-            <span className="kpi-lbl">博士导师 · Advisors</span>
-          </div>
-          <div className="kpi-item">
-            <span className="kpi-num">{direct_students_count}</span>
-            <span className="kpi-lbl">直接博士生 · Students</span>
-          </div>
-          <div className="kpi-item">
-            <span className="kpi-num">{total_descendants_count}</span>
-            <span className="kpi-lbl">学术后代总数 · Descendants</span>
-          </div>
-          <div className="kpi-item">
-            <span className="kpi-num" style={{ color: dissertations.length > 0 ? "var(--proof-emerald)" : "var(--ink-muted)" }}>
-              {dissertations.length}
-            </span>
-            <span className="kpi-lbl">可核验论文原件 · Thesis Proofs</span>
-          </div>
+        <div className="plate-tally">
+          <span><strong>{advisors.length}</strong> {advisors.length === 1 ? "Advisor" : "Advisors"}</span>
+          <span>·</span>
+          <span><strong>{direct_students_count}</strong> {direct_students_count === 1 ? "Student" : "Students"}</span>
+          <span>·</span>
+          <span><strong>{total_descendants_count}</strong> {total_descendants_count === 1 ? "Descendant" : "Descendants"}</span>
         </div>
       </section>
 
-      {/* Interactive Genealogy Graph */}
+      {/* Centerpiece Family Tree Scroll */}
       <GenealogyGraph
         graph={graph}
         onSelectScholar={onSelectScholar}
@@ -168,203 +150,89 @@ export default function ScholarDetail({ scholarId, onSelectScholar, onBack, onOp
         }}
       />
 
-      {/* Two-Column Dissertation Provenance + Advisors */}
-      <div className="detail-grid">
-        {/* Dissertation Provenance Card */}
-        <section className="surface-card">
-          <h2 className="card-heading">
-            <span>博士论文与原文溯源 · Dissertation Provenance</span>
-          </h2>
-
-          {dissertations.length > 0 ? (
-            dissertations.map((d) => (
-              <div key={d.id} className="evidence-box">
-                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-                  <span className="badge badge-verified">✓ 官方论文库实时核验</span>
-                  <span className="badge badge-repo">{d.source_repo} · {d.source_record_id}</span>
-                </div>
-
-                <div className="evidence-title">“{d.title}”</div>
-                {d.title_en && (
-                  <div style={{ fontSize: "0.88rem", color: "var(--ink-secondary)", fontStyle: "italic", marginBottom: 6 }}>
-                    English Title: {d.title_en}
-                  </div>
-                )}
-
-                <div style={{ fontSize: "0.84rem", color: "var(--ink-secondary)", lineHeight: 1.7 }}>
-                  <div><strong>论文登记作者：</strong>{d.author_raw}</div>
-                  <div><strong>论文登记导师：</strong>{(d.advisors_raw || []).join("；")}</div>
-                  <div>
-                    <strong>授予机构：</strong>{d.institution || scholar.university || "—"}
-                    {d.department ? `（${d.department}）` : ""}
-                    {d.year ? ` · ${d.year}` : ""}
-                  </div>
-                  {d.doi && (
-                    <div>
-                      <strong>DOI：</strong><span className="mono">{d.doi}</span>
-                    </div>
-                  )}
-                  <div className="mono" style={{ fontSize: "0.75rem", color: "var(--ink-muted)", marginTop: 4 }}>
-                    核验入库时间：{d.verified_at} UTC
-                  </div>
-                </div>
-
-                <div className="evidence-links">
-                  <a className="evidence-link-btn" href={d.landing_url} target="_blank" rel="noreferrer">
-                    访问官方论文页面 ↗
-                  </a>
-                  {d.pdf_url && (
-                    <a className="evidence-link-btn" href={d.pdf_url} target="_blank" rel="noreferrer">
-                      下载/查看论文 PDF ↗
-                    </a>
-                  )}
+      {/* Minimal Advisors & Students Ledger */}
+      <div className="lineage-columns">
+        <section className="parchment-panel">
+          <h2 className="panel-heading">Doctoral Advisors ({advisors.length})</h2>
+          {advisors.length === 0 ? (
+            <p style={{ margin: 0, fontStyle: "italic", color: "var(--ink-muted)" }}>
+              No advisor recorded.
+            </p>
+          ) : (
+            advisors.map((adv) => (
+              <div key={adv.id} className="advisor-row">
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 8 }}>
                   <button
-                    className="btn btn-sm"
-                    onClick={() => setShowRawJson((v) => !v)}
+                    className="text-link-btn"
+                    style={{ fontFamily: "var(--font-heading)", fontSize: "1.2rem", fontWeight: 600 }}
+                    onClick={() => onSelectScholar(adv.id)}
                   >
-                    {showRawJson ? "收起原始元数据 JSON" : "查看官方原始元数据 JSON"}
+                    {adv.name}
                   </button>
+                  <span style={{ fontSize: "0.78rem", fontStyle: "italic", color: adv.source_type === "dissertation_verified" ? "var(--seal-verdigris)" : "var(--ink-muted)" }}>
+                    {adv.source_type === "dissertation_verified" ? "✦ Thesis" : "MGP"}
+                  </span>
                 </div>
-
-                {showRawJson && (
-                  <pre className="raw-meta-pre">
-                    {JSON.stringify(d.raw_metadata, null, 2)}
-                  </pre>
-                )}
+                <div style={{ fontSize: "0.88rem", color: "var(--ink-muted)" }}>
+                  {adv.university || "Institution unrecorded"}{adv.year ? `, ${adv.year}` : ""}
+                </div>
               </div>
             ))
-          ) : (
-            <div style={{ color: "var(--ink-secondary)", fontSize: "0.92rem" }}>
-              {scholar.thesis_title ? (
-                <div style={{ marginBottom: 12 }}>
-                  <div style={{ fontSize: "0.8rem", color: "var(--ink-muted)", marginBottom: 4 }}>历史登记论文题目</div>
-                  <div style={{ fontFamily: "var(--font-serif)", fontStyle: "italic", fontSize: "1.06rem", color: "var(--ink-primary)" }}>
-                    “{scholar.thesis_title}”
-                  </div>
-                </div>
-              ) : null}
-              <p style={{ margin: "0 0 12px", color: "var(--ink-muted)" }}>
-                该学者目前属于历史谱系底座或由其学生的已核验论文反向关联，尚未绑定官方学位论文库直链。
-                如果你能检索到其博士论文的 DOI、MIT Handle、HAL 或 theses.fr 编号，可前往「论文核验录入」补充原文证据。
-              </p>
-            </div>
           )}
         </section>
 
-        {/* Advisors Card */}
-        <section className="surface-card">
-          <h2 className="card-heading">
-            <span>博士导师 · Doctoral Advisors ({advisors.length})</span>
-          </h2>
-          {advisors.length === 0 ? (
-            <p style={{ color: "var(--ink-muted)", fontSize: "0.9rem", margin: 0 }}>
-              当前库中未记录上溯导师（可能为历史谱系起点或待核验补充）。
+        <section className="parchment-panel">
+          <h2 className="panel-heading">Doctoral Students ({students.length})</h2>
+          {students.length === 0 ? (
+            <p style={{ margin: 0, fontStyle: "italic", color: "var(--ink-muted)" }}>
+              No doctoral students recorded yet.
             </p>
           ) : (
-            <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-              {advisors.map((adv) => (
-                <div
-                  key={adv.id}
-                  style={{
-                    padding: "12px 14px",
-                    border: "1px solid var(--border-hairline)",
-                    borderRadius: "var(--radius-md)",
-                    background: "var(--bg-page)",
-                  }}
-                >
-                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
-                    <button
-                      className="link-btn"
-                      style={{ fontFamily: "var(--font-serif)", fontSize: "1.08rem", fontWeight: 600 }}
-                      onClick={() => onSelectScholar(adv.id)}
-                    >
-                      {adv.name} {adv.name_zh ? `(${adv.name_zh})` : ""}
-                    </button>
-                    <span className={`badge ${adv.source_type === "dissertation_verified" ? "badge-verified" : "badge-historical"}`}>
-                      {adv.source_type === "dissertation_verified"
-                        ? "✓ 论文实证"
-                        : adv.source_type === "mgp_official"
-                        ? "MGP 原站谱系"
-                        : "Wikidata P184"}
-                    </span>
-                  </div>
-                  <div style={{ fontSize: "0.82rem", color: "var(--ink-secondary)", marginTop: 4 }}>
-                    {adv.university || "Institution n/a"} {adv.year ? `· ${adv.year}` : ""}
-                  </div>
-                </div>
-              ))}
+            <div style={{ overflowX: "auto" }}>
+              <table className="ledger-table">
+                <thead>
+                  <tr>
+                    <th>Name</th>
+                    <th>Institution</th>
+                    <th>Year</th>
+                    <th>Desc.</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {students.map((st) => (
+                    <tr key={st.id}>
+                      <td>
+                        <button
+                          className="text-link-btn"
+                          style={{ fontFamily: "var(--font-heading)", fontSize: "1.08rem", fontWeight: 600 }}
+                          onClick={() => onSelectScholar(st.id)}
+                        >
+                          {st.name}
+                        </button>
+                        {st.dissertation_url && (
+                          <a
+                            href={st.dissertation_url}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="verified-mark"
+                            style={{ marginLeft: 7, fontSize: "0.76rem" }}
+                            title="View official dissertation"
+                          >
+                            ✦
+                          </a>
+                        )}
+                      </td>
+                      <td style={{ fontSize: "0.88rem", color: "var(--ink-muted)" }}>{st.university || "—"}</td>
+                      <td style={{ fontSize: "0.88rem" }}>{st.year || "—"}</td>
+                      <td style={{ fontSize: "0.88rem", color: "var(--ink-muted)" }}>{st.total_descendants || ""}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
             </div>
           )}
         </section>
       </div>
-
-      {/* Students Table (Classic MGP Style, Upgraded) */}
-      <section className="surface-card">
-        <h2 className="card-heading">
-          <span>指导博士生列表 · Doctoral Students ({students.length})</span>
-          <span style={{ fontSize: "0.82rem", fontFamily: "var(--font-sans)", fontWeight: 400, color: "var(--ink-muted)" }}>
-            总学术后代：{total_descendants_count} 人
-          </span>
-        </h2>
-
-        {students.length === 0 ? (
-          <p style={{ color: "var(--ink-muted)", fontSize: "0.9rem", margin: 0 }}>
-            当前库中暂无该学者指导的博士生记录。
-          </p>
-        ) : (
-          <div style={{ overflowX: "auto" }}>
-            <table className="data-table">
-              <thead>
-                <tr>
-                  <th>学生姓名 Name</th>
-                  <th>毕业院校 School</th>
-                  <th>年份 Year</th>
-                  <th>学术后代 Descendants</th>
-                  <th>溯源状态 Provenance</th>
-                </tr>
-              </thead>
-              <tbody>
-                {students.map((st) => (
-                  <tr key={st.id}>
-                    <td>
-                      <button
-                        className="link-btn"
-                        style={{ fontFamily: "var(--font-serif)", fontSize: "1rem", fontWeight: 600 }}
-                        onClick={() => onSelectScholar(st.id)}
-                      >
-                        {st.name}
-                      </button>
-                      {st.name_zh && (
-                        <span style={{ marginLeft: 6, fontSize: "0.8rem", color: "var(--ink-muted)" }}>
-                          {st.name_zh}
-                        </span>
-                      )}
-                      {st.thesis_title && (
-                        <div style={{ fontSize: "0.78rem", color: "var(--ink-muted)", fontStyle: "italic", marginTop: 2 }}>
-                          {st.thesis_title.length > 90 ? st.thesis_title.slice(0, 89) + "…" : st.thesis_title}
-                        </div>
-                      )}
-                    </td>
-                    <td>{st.university || "—"}</td>
-                    <td className="mono">{st.year || "—"}</td>
-                    <td className="mono">{st.total_descendants}</td>
-                    <td>
-                      <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-                        <VerificationBadge status={st.verification_status} repo={st.source_repo} />
-                        {st.dissertation_url && (
-                          <a href={st.dissertation_url} target="_blank" rel="noreferrer" style={{ fontSize: "0.78rem" }}>
-                            原文 ↗
-                          </a>
-                        )}
-                      </div>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </section>
     </div>
   );
 }

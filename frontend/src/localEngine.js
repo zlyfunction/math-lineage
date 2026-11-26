@@ -573,11 +573,11 @@ export const localEngine = {
         }
       }
     } else {
-      throw new Error("纯静态站点模式支持浏览器直连核验 DataCite DOI、HAL/TEL 编号与 theses.fr 编号；MIT Handle 与 PDF 扉页解析请运行本地/后端 FastAPI 模式，或通过 GitHub Issue 触发自动核验。");
+      throw new Error("In static site mode, live verification supports DataCite DOIs, HAL/TEL IDs, and theses.fr IDs directly. For MIT Handles or direct thesis PDFs, run the local backend or submit via GitHub.");
     }
 
     if (!cand) {
-      throw new Error("未能从官方论文库检索到该编号，请检查 DOI / HAL ID / theses.fr 编号是否正确。");
+      throw new Error("Could not find this identifier in DataCite, HAL/TEL, or theses.fr. Please verify the ID.");
     }
 
     return _attachDbMatches(st, cand);
@@ -819,7 +819,7 @@ export const localEngine = {
   },
 
   async triggerHarvest() {
-    throw new Error("当前运行在 GitHub Pages 静态托管模式：批量采集已配置为 GitHub Actions 定期/手动自动运行，点击下方按钮即可在 GitHub Actions 触发增量采集并自动重新部署。");
+    throw new Error("Automated harvesting runs via GitHub Actions on static deployments.");
   },
 };
 
@@ -827,12 +827,12 @@ function _attachDbMatches(st, cand) {
   const notes = [];
   const existingScholar = findMatchingScholar(st, cand.scholar_name);
   if (existingScholar) {
-    notes.push(`已匹配本地谱系学者 #${existingScholar.id} (${existingScholar.name})，批准后将补充论文原文证据。`);
+    notes.push(`Matches existing scholar #${existingScholar.id} (${existingScholar.name}); approval will attach thesis provenance.`);
   }
   const matchedAdvisors = (cand.advisors || []).map((adv) => {
     const m = findMatchingScholar(st, adv);
     if (m) {
-      notes.push(`导师 “${adv}” 自动匹配已有谱系节点 #${m.id} (${m.name})。`);
+      notes.push(`Advisor "${adv}" matched to existing scholar #${m.id} (${m.name}).`);
       return { raw_name: adv, matched: true, scholar: m };
     }
     return { raw_name: adv, matched: false, scholar: null };
@@ -842,7 +842,7 @@ function _attachDbMatches(st, cand) {
     (d) => d.source_repo === cand.source_repo && d.source_record_id === cand.source_record_id
   );
   if (dup) {
-    notes.push(`该论文已在当前数据库中完成核验（学者 #${dup.scholar_id}）。`);
+    notes.push(`This dissertation is already recorded (scholar #${dup.scholar_id}).`);
   }
   return {
     ...cand,

@@ -1,29 +1,43 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 
 /**
- * Interactive layered SVG Genealogy Graph (Ancestors above, Focus centered, Descendants below).
- * Supports smooth pan, mouse-wheel zoom, zoom controls, node hover highlight, and click-to-navigate.
+ * Interactive Parchment Family Tree SVG Canvas.
+ * Full mobile & desktop gesture support:
+ * - Single-finger touch drag to pan (native non-passive touch listeners for iOS/Android)
+ * - Two-finger pinch-to-zoom centered at the midpoint
+ * - Clean tap-vs-drag detection (< 10px movement opens node)
+ * - Desktop mouse drag + wheel zoom + SVG export
  */
-export default function GenealogyGraph({ graph, onSelectScholar, ancestorDepth, descendantDepth, onDepthChange }) {
+export default function GenealogyGraph({
+  graph,
+  onSelectScholar,
+  ancestorDepth,
+  descendantDepth,
+  onDepthChange,
+}) {
   const [transform, setTransform] = useState({ x: 0, y: 0, k: 1 });
-  const [dragging, setDragging] = useState(false);
   const [hoveredId, setHoveredId] = useState(null);
-  const dragStart = useRef({ x: 0, y: 0, tx: 0, ty: 0 });
   const containerRef = useRef(null);
   const svgRef = useRef(null);
+  const transformRef = useRef(transform);
+  transformRef.current = transform;
 
-  const handleExportSvg = () => {
-    if (!svgRef.current) return;
-    const serializer = new XMLSerializer();
-    const raw = serializer.serializeToString(svgRef.current);
-    const blob = new Blob([raw], { type: "image/svg+xml;charset=utf-8" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `mathlineage-graph-${graph?.focus_id || "tree"}.svg`;
-    a.click();
-    URL.revokeObjectURL(url);
-  };
+  const gestureRef = useRef({
+    mode: null, // 'mouse' | 'pan' | 'pinch'
+    startX: 0,
+    startY: 0,
+    tx: 0,
+    ty: 0,
+    moved: 0,
+    tappedNodeId: null,
+    pinchDist: 0,
+    pinchK: 1,
+    pinchMidX: 0,
+    pinchMidY: 0,
+  });
+
+  const onSelectRef = useRef(onSelectScholar);
+  onSelectRef.current = onSelectScholar;
 
   const layout = useMemo(() => {
     if (!graph || !graph.nodes || graph.nodes.length === 0) {
@@ -37,12 +51,11 @@ export default function GenealogyGraph({ graph, onSelectScholar, ancestorDepth, 
     }
 
     const sortedLevels = Array.from(byLevel.keys()).sort((a, b) => a - b);
-    const nodeW = 196;
-    const nodeH = 62;
-    const gapX = 28;
-    const gapY = 92;
+    const nodeW = 204;
+    const nodeH = 64;
+    const gapX = 26;
+    const gapY = 86;
 
-    // Sort within each level by year then name for clean, stable ordering
     let maxRowWidth = 0;
     for (const lvl of sortedLevels) {
       const arr = byLevel.get(lvl);
@@ -55,15 +68,15 @@ export default function GenealogyGraph({ graph, onSelectScholar, ancestorDepth, 
       if (rowW > maxRowWidth) maxRowWidth = rowW;
     }
 
-    const canvasW = Math.max(920, maxRowWidth + 120);
-    const canvasH = Math.max(460, sortedLevels.length * (nodeH + gapY) + 100);
+    const canvasW = Math.max(920, maxRowWidth + 140);
+    const canvasH = Math.max(480, sortedLevels.length * (nodeH + gapY) + 120);
     const posMap = new Map();
 
     sortedLevels.forEach((lvl, rowIdx) => {
       const arr = byLevel.get(lvl);
       const rowW = arr.length * (nodeW + gapX) - gapX;
       const startX = (canvasW - rowW) / 2;
-      const y = 52 + rowIdx * (nodeH + gapY);
+      const y = 56 + rowIdx * (nodeH + gapY);
       arr.forEach((n, i) => {
         const x = startX + i * (nodeW + gapX);
         posMap.set(n.id, { ...n, x, y, w: nodeW, h: nodeH, cx: x + nodeW / 2, cy: y + nodeH / 2 });
@@ -90,174 +103,272 @@ export default function GenealogyGraph({ graph, onSelectScholar, ancestorDepth, 
     };
   }, [graph]);
 
-  // Center graph on focus scholar whenever graph changes
-  useEffect(() => {
+  const centerOnFocus = () => {
     const el = containerRef.current;
     if (!el || !layout.focusPos) return;
-    const vw = el.clientWidth || 900;
-    const vh = el.clientHeight || 490;
-    const k = layout.nodes.length > 20 ? 0.85 : 0.96;
+    const vw = el.clientWidth || 860;
+    const vh = el.clientHeight || 500;
+    const isMobile = vw < 640;
+    const k = isMobile ? 0.78 : layout.nodes.length > 24 ? 0.85 : 0.96;
     setTransform({
       x: vw / 2 - layout.focusPos.x * k,
-      y: vh / 2 - layout.focusPos.y * k,
+      y: vh * 0.56 - layout.focusPos.y * k,
       k,
     });
+  };
+
+  useEffect(() => {
+    centerOnFocus();
   }, [layout]);
 
+  // Native non-passive touch & wheel listeners for buttery-smooth mobile drag & pinch zoom
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el) return;
+
+    const getDist = (t1, t2) => Math.hypot(t2.clientX - t1.clientX, t2.clientY - t1.clientY);
+
+    const onTouchStart = (e) => {
+      if (e.touches.length === 1) {
+        const t = e.touches[0];
+        const nodeEl = e.target.closest?.("[data-node-id]");
+        gestureRef.current = {
+          mode: "pan",
+          startX: t.clientX,
+          startY: t.clientY,
+          tx: transformRef.current.x,
+          ty: transformRef.current.y,
+          moved: 0,
+          tappedNodeId: nodeEl ? Number(nodeEl.getAttribute("data-node-id")) : null,
+          pinchDist: 0,
+          pinchK: transformRef.current.k,
+          pinchMidX: 0,
+          pinchMidY: 0,
+        };
+      } else if (e.touches.length === 2) {
+        e.preventDefault();
+        const [t1, t2] = [e.touches[0], e.touches[1]];
+        const rect = el.getBoundingClientRect();
+        gestureRef.current = {
+          mode: "pinch",
+          startX: 0,
+          startY: 0,
+          tx: transformRef.current.x,
+          ty: transformRef.current.y,
+          moved: 999,
+          tappedNodeId: null,
+          pinchDist: Math.max(10, getDist(t1, t2)),
+          pinchK: transformRef.current.k,
+          pinchMidX: (t1.clientX + t2.clientX) / 2 - rect.left,
+          pinchMidY: (t1.clientY + t2.clientY) / 2 - rect.top,
+        };
+      }
+    };
+
+    const onTouchMove = (e) => {
+      const g = gestureRef.current;
+      if (g.mode === "pan" && e.touches.length === 1) {
+        e.preventDefault();
+        const t = e.touches[0];
+        const dx = t.clientX - g.startX;
+        const dy = t.clientY - g.startY;
+        g.moved = Math.max(g.moved, Math.hypot(dx, dy));
+        setTransform((prev) => ({ ...prev, x: g.tx + dx, y: g.ty + dy }));
+      } else if (g.mode === "pinch" && e.touches.length === 2) {
+        e.preventDefault();
+        const [t1, t2] = [e.touches[0], e.touches[1]];
+        const dist = getDist(t1, t2);
+        const nextK = Math.max(0.32, Math.min(2.2, g.pinchK * (dist / g.pinchDist)));
+        const scaleRatio = nextK / g.pinchK;
+        setTransform({
+          k: nextK,
+          x: g.pinchMidX - (g.pinchMidX - g.tx) * scaleRatio,
+          y: g.pinchMidY - (g.pinchMidY - g.ty) * scaleRatio,
+        });
+      }
+    };
+
+    const onTouchEnd = (e) => {
+      const g = gestureRef.current;
+      if (g.mode === "pan" && g.moved < 10 && g.tappedNodeId) {
+        onSelectRef.current?.(g.tappedNodeId);
+      }
+      if (e.touches.length === 0) {
+        g.mode = null;
+      }
+    };
+
+    const onWheel = (e) => {
+      e.preventDefault();
+      const factor = e.deltaY < 0 ? 1.1 : 0.91;
+      const rect = el.getBoundingClientRect();
+      const mx = e.clientX - rect.left;
+      const my = e.clientY - rect.top;
+      setTransform((prev) => {
+        const nextK = Math.max(0.32, Math.min(2.2, prev.k * factor));
+        return {
+          k: nextK,
+          x: mx - ((mx - prev.x) * nextK) / prev.k,
+          y: my - ((my - prev.y) * nextK) / prev.k,
+        };
+      });
+    };
+
+    el.addEventListener("touchstart", onTouchStart, { passive: false });
+    el.addEventListener("touchmove", onTouchMove, { passive: false });
+    el.addEventListener("touchend", onTouchEnd, { passive: true });
+    el.addEventListener("wheel", onWheel, { passive: false });
+    return () => {
+      el.removeEventListener("touchstart", onTouchStart);
+      el.removeEventListener("touchmove", onTouchMove);
+      el.removeEventListener("touchend", onTouchEnd);
+      el.removeEventListener("wheel", onWheel);
+    };
+  }, []);
+
   const handleMouseDown = (e) => {
-    if (e.target.closest("[data-node-id]")) return;
-    setDragging(true);
-    dragStart.current = { x: e.clientX, y: e.clientY, tx: transform.x, ty: transform.y };
+    const nodeEl = e.target.closest?.("[data-node-id]");
+    gestureRef.current = {
+      ...gestureRef.current,
+      mode: "mouse",
+      startX: e.clientX,
+      startY: e.clientY,
+      tx: transform.x,
+      ty: transform.y,
+      moved: 0,
+      tappedNodeId: nodeEl ? Number(nodeEl.getAttribute("data-node-id")) : null,
+    };
   };
 
   const handleMouseMove = (e) => {
-    if (!dragging) return;
-    setTransform((prev) => ({
-      ...prev,
-      x: dragStart.current.tx + (e.clientX - dragStart.current.x),
-      y: dragStart.current.ty + (e.clientY - dragStart.current.y),
-    }));
+    const g = gestureRef.current;
+    if (g.mode !== "mouse") return;
+    const dx = e.clientX - g.startX;
+    const dy = e.clientY - g.startY;
+    g.moved = Math.max(g.moved, Math.hypot(dx, dy));
+    setTransform((prev) => ({ ...prev, x: g.tx + dx, y: g.ty + dy }));
   };
 
-  const handleMouseUp = () => setDragging(false);
-
-  const handleWheel = (e) => {
-    e.preventDefault();
-    const factor = e.deltaY < 0 ? 1.1 : 0.91;
-    setTransform((prev) => {
-      const nextK = Math.max(0.35, Math.min(2.2, prev.k * factor));
-      const rect = containerRef.current.getBoundingClientRect();
-      const mx = e.clientX - rect.left;
-      const my = e.clientY - rect.top;
-      return {
-        k: nextK,
-        x: mx - ((mx - prev.x) * nextK) / prev.k,
-        y: my - ((my - prev.y) * nextK) / prev.k,
-      };
-    });
+  const handleMouseUp = () => {
+    const g = gestureRef.current;
+    if (g.mode === "mouse" && g.moved < 6 && g.tappedNodeId) {
+      onSelectScholar(g.tappedNodeId);
+    }
+    g.mode = null;
   };
 
-  const resetView = () => {
-    const el = containerRef.current;
-    const vw = el?.clientWidth || 900;
-    const vh = el?.clientHeight || 490;
-    setTransform({
-      x: vw / 2 - layout.focusPos.x * 0.92,
-      y: vh / 2 - layout.focusPos.y * 0.92,
-      k: 0.92,
-    });
+  const handleExportSvg = () => {
+    if (!svgRef.current) return;
+    const raw = new XMLSerializer().serializeToString(svgRef.current);
+    const blob = new Blob([raw], { type: "image/svg+xml;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `genealogy-${graph?.focus_id || "tree"}.svg`;
+    a.click();
+    URL.revokeObjectURL(url);
   };
 
   const getNodeStyle = (n) => {
     if (n.is_focus) {
-      return { fill: "#1B4965", stroke: "#13354A", text: "#FFFFFF", sub: "#D5E6F0" };
+      return {
+        fill: "#6D2323",
+        stroke: "#461414",
+        innerStroke: "rgba(248, 242, 226, 0.35)",
+        text: "#FAF2DF",
+        sub: "#E6D4B8",
+      };
     }
     if (n.verification_status === "verified_dissertation") {
-      return { fill: "#F1F9F5", stroke: "#1E6B52", text: "#18191C", sub: "#1E6B52" };
+      return {
+        fill: "#F9F4E6",
+        stroke: "#265944",
+        innerStroke: "rgba(38, 89, 68, 0.24)",
+        text: "#241B12",
+        sub: "#265944",
+      };
     }
-    if (n.verification_status === "historical_wikidata") {
-      return { fill: "#FFFBF2", stroke: "#C98D3B", text: "#18191C", sub: "#6E5734" };
-    }
-    return { fill: "#FFFFFF", stroke: "#C5BEB1", text: "#18191C", sub: "#5A5E66" };
+    return {
+      fill: "#FAF4E4",
+      stroke: "#8C7355",
+      innerStroke: "rgba(140, 115, 85, 0.26)",
+      text: "#241B12",
+      sub: "#6E5C47",
+    };
   };
 
   const truncate = (str, n) => (str && str.length > n ? str.slice(0, n - 1) + "…" : str || "");
 
   return (
-    <section className="graph-card" aria-label="Interactive Academic Genealogy Graph">
-      <div className="graph-toolbar">
-        <div>
-          <strong style={{ fontFamily: "var(--font-serif)", fontSize: "1.06rem" }}>
-            交互式学术师承图谱 · Lineage Graph
-          </strong>
-          <div className="graph-legend" style={{ marginTop: 4 }}>
-            <span>
-              <span className="legend-dot" style={{ background: "#1B4965" }} />
-              当前学者 Focus
-            </span>
-            <span>
-              <span className="legend-dot" style={{ background: "#1E6B52" }} />
-              论文直链核验 Verified
-            </span>
-            <span>
-              <span className="legend-dot" style={{ background: "#C98D3B" }} />
-              MGP / Wikidata 历史谱系
-            </span>
-            <span>
-              <span className="legend-dot" style={{ background: "#A39B8F" }} />
-              导师关联节点
-            </span>
-          </div>
-        </div>
-
-        <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-          <label style={{ fontSize: "0.78rem", color: "var(--ink-secondary)" }}>
-            上溯
+    <section className="tree-frame" aria-label="Academic Family Tree">
+      <div className="tree-toolbar">
+        <span className="tree-toolbar-title">Pedigree Chart</span>
+        <div className="tree-controls">
+          <label style={{ fontSize: "0.82rem", color: "var(--ink-muted)" }}>
+            Ancestors{" "}
             <select
-              className="filter-select"
-              style={{ marginLeft: 4, padding: "4px 7px" }}
+              className="parchment-select"
+              style={{ padding: "3px 6px", fontSize: "0.82rem" }}
               value={ancestorDepth}
               onChange={(e) => onDepthChange(Number(e.target.value), descendantDepth)}
             >
               {[2, 4, 6, 8, 12].map((d) => (
-                <option key={d} value={d}>{d} 代</option>
+                <option key={d} value={d}>{d}</option>
               ))}
             </select>
           </label>
-          <label style={{ fontSize: "0.78rem", color: "var(--ink-secondary)" }}>
-            下延
+          <label style={{ fontSize: "0.82rem", color: "var(--ink-muted)" }}>
+            Descendants{" "}
             <select
-              className="filter-select"
-              style={{ marginLeft: 4, padding: "4px 7px" }}
+              className="parchment-select"
+              style={{ padding: "3px 6px", fontSize: "0.82rem" }}
               value={descendantDepth}
               onChange={(e) => onDepthChange(ancestorDepth, Number(e.target.value))}
             >
               {[1, 2, 3, 4].map((d) => (
-                <option key={d} value={d}>{d} 代</option>
+                <option key={d} value={d}>{d}</option>
               ))}
             </select>
           </label>
-          <button className="btn btn-sm" onClick={() => setTransform((p) => ({ ...p, k: Math.min(2.2, p.k * 1.18) }))}>
-            ＋
+          <button
+            className="btn btn-xs"
+            onClick={() => setTransform((p) => ({ ...p, k: Math.min(2.2, p.k * 1.18) }))}
+            aria-label="Zoom in"
+          >
+            +
           </button>
-          <button className="btn btn-sm" onClick={() => setTransform((p) => ({ ...p, k: Math.max(0.35, p.k * 0.85) }))}>
-            －
+          <button
+            className="btn btn-xs"
+            onClick={() => setTransform((p) => ({ ...p, k: Math.max(0.32, p.k * 0.85) }))}
+            aria-label="Zoom out"
+          >
+            −
           </button>
-          <button className="btn btn-sm" onClick={resetView}>
-            居中 Reset
+          <button className="btn btn-xs" onClick={centerOnFocus}>
+            Center
           </button>
-          <button className="btn btn-sm" onClick={handleExportSvg} title="导出矢量师承图 SVG">
-            导出 SVG
+          <button className="btn btn-xs" onClick={handleExportSvg}>
+            SVG
           </button>
         </div>
       </div>
 
       <div
         ref={containerRef}
-        className="graph-canvas-wrap"
+        className="tree-viewport"
         onMouseDown={handleMouseDown}
         onMouseMove={handleMouseMove}
         onMouseUp={handleMouseUp}
         onMouseLeave={handleMouseUp}
-        onWheel={handleWheel}
       >
         {layout.nodes.length === 0 ? (
-          <div style={{ padding: 48, textAlign: "center", color: "var(--ink-muted)" }}>
-            暂无关联的师承关系边。
+          <div style={{ padding: 48, textAlign: "center", color: "var(--ink-muted)", fontStyle: "italic" }}>
+            No recorded lineage connections yet.
           </div>
         ) : (
           <svg ref={svgRef} width="100%" height="100%" xmlns="http://www.w3.org/2000/svg">
-            <defs>
-              <marker id="arrow-verified" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
-                <path d="M 0 1 L 10 5 L 0 9 z" fill="#1E6B52" />
-              </marker>
-              <marker id="arrow-historical" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
-                <path d="M 0 1 L 10 5 L 0 9 z" fill="#B0A696" />
-              </marker>
-            </defs>
-
             <g transform={`translate(${transform.x}, ${transform.y}) scale(${transform.k})`}>
-              {/* Curved cubic Bezier advisor -> student edges */}
+              {/* Organic Sepia Ink Family Tree Branches */}
               {layout.edges.map((e, idx) => {
                 const x1 = e.src.cx;
                 const y1 = e.src.y + e.src.h;
@@ -267,20 +378,26 @@ export default function GenealogyGraph({ graph, onSelectScholar, ancestorDepth, 
                 const isVerified = e.source_type === "dissertation_verified";
                 const isHighlighted = hoveredId && (e.source === hoveredId || e.target === hoveredId);
                 return (
-                  <path
-                    key={`${e.source}-${e.target}-${idx}`}
-                    d={`M ${x1} ${y1} C ${x1} ${midY}, ${x2} ${midY}, ${x2} ${y2 - 2}`}
-                    fill="none"
-                    stroke={isVerified ? "#1E6B52" : isHighlighted ? "#1B4965" : "#BDB4A5"}
-                    strokeWidth={isHighlighted ? 2.4 : isVerified ? 1.85 : 1.35}
-                    strokeDasharray={isVerified ? "none" : "5 3"}
-                    opacity={hoveredId && !isHighlighted ? 0.35 : 0.92}
-                    markerEnd={isVerified ? "url(#arrow-verified)" : "url(#arrow-historical)"}
-                  />
+                  <g key={`${e.source}-${e.target}-${idx}`}>
+                    <path
+                      d={`M ${x1} ${y1} C ${x1} ${midY}, ${x2} ${midY}, ${x2} ${y2}`}
+                      fill="none"
+                      stroke={isVerified ? "#265944" : isHighlighted ? "#6D2323" : "#8A7152"}
+                      strokeWidth={isHighlighted ? 2.2 : isVerified ? 1.75 : 1.3}
+                      opacity={hoveredId && !isHighlighted ? 0.3 : 0.88}
+                    />
+                    <circle
+                      cx={x2}
+                      cy={y2}
+                      r={2.4}
+                      fill={isVerified ? "#265944" : "#8A7152"}
+                      opacity={hoveredId && !isHighlighted ? 0.3 : 0.9}
+                    />
+                  </g>
                 );
               })}
 
-              {/* Scholar Nodes */}
+              {/* Engraved Pedigree Cartouche Nodes */}
               {layout.nodes.map((n) => {
                 const st = getNodeStyle(n);
                 const isHov = hoveredId === n.id;
@@ -292,46 +409,64 @@ export default function GenealogyGraph({ graph, onSelectScholar, ancestorDepth, 
                     style={{ cursor: "pointer" }}
                     onMouseEnter={() => setHoveredId(n.id)}
                     onMouseLeave={() => setHoveredId(null)}
-                    onClick={() => onSelectScholar(n.id)}
                   >
+                    {/* Outer plaque */}
                     <rect
                       width={n.w}
                       height={n.h}
-                      rx={8}
+                      rx={4}
                       fill={st.fill}
-                      stroke={isHov ? "#1B4965" : st.stroke}
-                      strokeWidth={n.is_focus || isHov ? 2.2 : 1.3}
+                      stroke={isHov ? "#6D2323" : st.stroke}
+                      strokeWidth={n.is_focus || isHov ? 1.8 : 1.15}
                     />
+                    {/* Hairline engraved inner frame */}
+                    <rect
+                      x={3.5}
+                      y={3.5}
+                      width={n.w - 7}
+                      height={n.h - 7}
+                      rx={2}
+                      fill="none"
+                      stroke={st.innerStroke}
+                      strokeWidth={0.8}
+                    />
+                    {/* Verified dissertation seal dot */}
+                    {n.verification_status === "verified_dissertation" && !n.is_focus && (
+                      <circle cx={n.w - 13} cy={14} r={3.5} fill="#265944" />
+                    )}
                     <text
-                      x={12}
-                      y={23}
-                      fontSize="12.5"
+                      x={n.w / 2}
+                      y={26}
+                      textAnchor="middle"
+                      fontSize="14"
                       fontWeight="600"
-                      fontFamily="Newsreader, Georgia, serif"
+                      fontFamily="Cormorant Garamond, Georgia, serif"
                       fill={st.text}
                     >
-                      {truncate(n.name, 24)}
+                      {truncate(n.name, 25)}
                     </text>
                     <text
-                      x={12}
-                      y={40}
-                      fontSize="10.2"
-                      fontFamily="Inter, sans-serif"
+                      x={n.w / 2}
+                      y={43}
+                      textAnchor="middle"
+                      fontSize="11"
+                      fontStyle="italic"
+                      fontFamily="EB Garamond, Georgia, serif"
                       fill={st.sub}
                     >
-                      {truncate(n.university || (n.name_zh ? n.name_zh : "Institution n/a"), 27)}
+                      {truncate(n.university || "Institution unrecorded", 28)}
                     </text>
                     <text
-                      x={12}
-                      y={54}
-                      fontSize="9.6"
-                      fontFamily="JetBrains Mono, monospace"
+                      x={n.w / 2}
+                      y={56}
+                      textAnchor="middle"
+                      fontSize="10"
+                      fontFamily="EB Garamond, Georgia, serif"
                       fill={st.sub}
                       opacity={0.9}
                     >
-                      {n.year ? `${n.year}` : "—"}
-                      {n.verification_status === "verified_dissertation" ? " · ✓ Dissertation" : ""}
-                      {n.student_count > 0 ? ` · ${n.student_count} stu` : ""}
+                      {n.year ? n.year : "—"}
+                      {n.student_count > 0 ? ` · ${n.student_count} ${n.student_count === 1 ? "student" : "students"}` : ""}
                     </text>
                   </g>
                 );
@@ -339,10 +474,26 @@ export default function GenealogyGraph({ graph, onSelectScholar, ancestorDepth, 
             </g>
           </svg>
         )}
+      </div>
 
-        <div className="graph-hint">
-          拖拽平移 · 滚轮缩放 · 点击任意学者跳转详情（共 {layout.nodes.length} 节点 / {layout.edges.length} 关系边）
+      <div className="tree-legend-bar">
+        <div className="legend-items">
+          <span>
+            <span className="legend-swatch" style={{ background: "#6D2323" }} />
+            Selected Scholar
+          </span>
+          <span>
+            <span className="legend-swatch" style={{ background: "#265944" }} />
+            Thesis-Verified
+          </span>
+          <span>
+            <span className="legend-swatch" style={{ background: "#8C7355" }} />
+            Historical Record
+          </span>
         </div>
+        <span style={{ fontStyle: "italic" }}>
+          Drag to pan · Pinch or scroll to zoom · Tap any name
+        </span>
       </div>
     </section>
   );

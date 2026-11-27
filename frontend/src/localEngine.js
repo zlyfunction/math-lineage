@@ -227,12 +227,15 @@ function decodeThesis(st, idx) {
   let pdf = customPdf || "";
   if (!url && rid) {
     if (repo === "HAL/TEL") url = `https://theses.hal.science/${rid}`;
+    else if (repo === "UC eScholarship") url = `https://escholarship.org/uc/item/${rid}`;
     else if (repo === "theses.fr") url = `https://theses.fr/${rid}`;
     else if (repo === "DataCite") url = `https://doi.org/${rid}`;
+    else if (repo === "Cornell eCommons") url = `https://hdl.handle.net/${rid}`;
     else if (repo === "MGP") url = `https://www.genealogy.math.ndsu.nodak.edu/id.php?id=${rid}`;
   }
-  if (pdf === "1" && repo === "HAL/TEL" && rid) {
-    pdf = `https://theses.hal.science/${rid}/document`;
+  if (pdf === "1" && rid) {
+    if (repo === "HAL/TEL") pdf = `https://theses.hal.science/${rid}/document`;
+    else if (repo === "UC eScholarship") pdf = `https://escholarship.org/content/qt${rid}/qt${rid}.pdf`;
   }
   return {
     t: title || "",

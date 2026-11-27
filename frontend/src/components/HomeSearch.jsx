@@ -140,11 +140,13 @@ export default function HomeSearch({ stats, onSelectScholar }) {
             }}
           >
             <option value="all">All Archives</option>
-            <option value="NYU Courant">NYU Courant</option>
-            <option value="MIT DSpace">MIT DSpace</option>
+            <option value="UC eScholarship">UC eScholarship (UCLA / Berkeley / UCSD / 9 UC)</option>
             <option value="HAL/TEL">HAL / TEL</option>
             <option value="theses.fr">theses.fr</option>
             <option value="DataCite">DataCite (Oxford / Cambridge / ETH / LMU)</option>
+            <option value="MIT DSpace">MIT DSpace</option>
+            <option value="Cornell eCommons">Cornell eCommons</option>
+            <option value="NYU Courant">NYU Courant</option>
           </select>
 
           {(query || statusFilter !== "all" || repoFilter !== "all") && (

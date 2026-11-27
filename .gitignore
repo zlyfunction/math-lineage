@@ -7,3 +7,6 @@ data/*.db
 data/genealogy.db-shm
 data/genealogy.db-wal
 .env
+frontend/public/data/*.gz
+frontend/public/data/genealogy-bundle.json
+

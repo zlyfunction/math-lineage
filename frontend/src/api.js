@@ -17,9 +17,13 @@ export function getRuntimeMode() {
 async function detectMode() {
   if (!_modePromise) {
     _modePromise = (async () => {
+      if (typeof window !== "undefined" && window.location.hostname.endsWith("github.io")) {
+        _runtimeMode = "static";
+        return "static";
+      }
       try {
         const controller = new AbortController();
-        const timer = setTimeout(() => controller.abort(), 1600);
+        const timer = setTimeout(() => controller.abort(), 1200);
         const res = await fetch("/api/stats", { signal: controller.signal });
         clearTimeout(timer);
         if (res.ok) {

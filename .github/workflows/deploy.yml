@@ -4,17 +4,12 @@ on:
   push:
     branches: ["main"]
   schedule:
-    # Weekly incremental harvest of new verified Ph.D. dissertations (Sundays 04:00 UTC)
+    # Weekly full rebuild from QLever Wikidata MGP mirror + 5 official thesis archives (Sundays 04:00 UTC)
     - cron: "0 4 * * 0"
   workflow_dispatch:
-    inputs:
-      run_harvest:
-        description: "Run incremental dissertation harvest before deploying?"
-        type: boolean
-        default: true
 
 permissions:
-  contents: write
+  contents: read
   pages: write
   id-token: write
 
@@ -33,33 +28,26 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Setup Python
-        if: github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.run_harvest == true)
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
 
-      - name: Run incremental verified dissertation harvest
-        if: github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.run_harvest == true)
+      - name: Build Full-Scale 265K+ Genealogy Dataset
         run: |
-          pip install -r backend/requirements.txt
+          pip install pypdf
+          python3 -u backend/scripts/build_full_scale.py
           python3 -c "
-          import sys
-          sys.path.insert(0, 'backend')
-          from app.ingest import run_harvest
-          for src in ['nyu_courant', 'hal', 'theses_fr', 'mit_dspace', 'datacite']:
-              try:
-                  print(src, run_harvest(src, '', 30))
-              except Exception as e:
-                  print(src, 'WARN:', e)
+          import gzip, json
+          core = json.loads(gzip.open('frontend/public/data/core.json.gz', 'rb').read())
+          edges = json.loads(gzip.open('frontend/public/data/edges.json.gz', 'rb').read())
+          theses = json.loads(gzip.open('frontend/public/data/theses.json.gz', 'rb').read())
+          assert len(core['n']) > 250000, f'Too few scholars: {len(core[\"n\"])}'
+          assert len(edges['a']) > 250000, f'Too few edges: {len(edges[\"a\"])}'
+          names_lower = {x.lower() for x in core['n']}
+          assert 'leyi zhu' in names_lower, 'Missing Leyi Zhu'
+          assert 'pat hanrahan' in names_lower, 'Missing Pat Hanrahan'
+          print('CI dataset integrity verified:', len(core['n']), 'scholars,', len(edges['a']), 'edges,', len(theses), 'theses')
           "
-          python3 backend/scripts/export_static_bundle.py
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          if ! git diff --quiet frontend/public/data/genealogy-bundle.json; then
-            git add frontend/public/data/genealogy-bundle.json
-            git commit -m "chore: weekly verified dissertation harvest"
-            git push
-          fi
 
       - name: Setup Node
         uses: actions/setup-node@v4

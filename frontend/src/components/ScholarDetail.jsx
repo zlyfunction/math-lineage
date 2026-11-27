@@ -130,11 +130,11 @@ export default function ScholarDetail({ scholarId, onSelectScholar, onBack, onOp
         )}
 
         <div className="plate-tally">
-          <span><strong>{advisors.length}</strong> {advisors.length === 1 ? "Advisor" : "Advisors"}</span>
+          <span><strong>{advisors.length.toLocaleString()}</strong> {advisors.length === 1 ? "Advisor" : "Advisors"}</span>
           <span>·</span>
-          <span><strong>{direct_students_count}</strong> {direct_students_count === 1 ? "Student" : "Students"}</span>
+          <span><strong>{direct_students_count.toLocaleString()}</strong> {direct_students_count === 1 ? "Student" : "Students"}</span>
           <span>·</span>
-          <span><strong>{total_descendants_count}</strong> {total_descendants_count === 1 ? "Descendant" : "Descendants"}</span>
+          <span><strong>{total_descendants_count.toLocaleString()}</strong> {total_descendants_count === 1 ? "Descendant" : "Descendants"}</span>
         </div>
       </section>
 
@@ -182,7 +182,7 @@ export default function ScholarDetail({ scholarId, onSelectScholar, onBack, onOp
         </section>
 
         <section className="parchment-panel">
-          <h2 className="panel-heading">Doctoral Students ({students.length})</h2>
+          <h2 className="panel-heading">Doctoral Students ({direct_students_count.toLocaleString()})</h2>
           {students.length === 0 ? (
             <p style={{ margin: 0, fontStyle: "italic", color: "var(--ink-muted)" }}>
               No doctoral students recorded yet.
@@ -224,11 +224,16 @@ export default function ScholarDetail({ scholarId, onSelectScholar, onBack, onOp
                       </td>
                       <td style={{ fontSize: "0.88rem", color: "var(--ink-muted)" }}>{st.university || "—"}</td>
                       <td style={{ fontSize: "0.88rem" }}>{st.year || "—"}</td>
-                      <td style={{ fontSize: "0.88rem", color: "var(--ink-muted)" }}>{st.total_descendants || ""}</td>
+                      <td style={{ fontSize: "0.88rem", color: "var(--ink-muted)" }}>{st.total_descendants ? st.total_descendants.toLocaleString() : ""}</td>
                     </tr>
                   ))}
                 </tbody>
               </table>
+              {students.length < direct_students_count && (
+                <p style={{ margin: "10px 0 0", fontSize: "0.82rem", fontStyle: "italic", color: "var(--ink-muted)" }}>
+                  Showing {students.length} of {direct_students_count.toLocaleString()} direct doctoral students.
+                </p>
+              )}
             </div>
           )}
         </section>

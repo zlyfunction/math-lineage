@@ -98,7 +98,10 @@ function buildCSRStore(core, edges, theses) {
   const aArr = edges.a.slice();
   const sArr = edges.s.slice();
   const tArr = edges.t.slice();
-  const thesesMap = { ...theses, ...(localAdded.theses || {}) };
+  const isV3Theses = theses && theses.v === 3 && theses.d;
+  const repoList = isV3Theses ? theses.r : ["MGP", "HAL/TEL", "theses.fr", "DataCite", "MIT DSpace", "NYU Courant"];
+  const rawThesesDict = isV3Theses ? theses.d : theses || {};
+  const thesesMap = { ...rawThesesDict, ...(localAdded.theses || {}) };
 
   const uIndex = new Map();
   for (let i = 0; i < u.length; i++) uIndex.set(u[i], i);
@@ -124,7 +127,7 @@ function buildCSRStore(core, edges, theses) {
   const N = n.length;
   const E = aArr.length;
 
-  // Lowercase ASCII name array for ~10ms substring search across 265K+ names
+  // Lowercase ASCII name array for fast substring search across 440K+ names
   const lowerN = new Array(N);
   const lowerU = u.map((x) => stripAccents(x).toLowerCase());
   for (let i = 0; i < N; i++) {
@@ -175,7 +178,8 @@ function buildCSRStore(core, edges, theses) {
 
   const _thesesLower = new Map();
   for (const [k, th] of Object.entries(thesesMap)) {
-    if (th?.t) _thesesLower.set(Number(k), stripAccents(th.t).toLowerCase());
+    const title = Array.isArray(th) ? th[0] : th?.t;
+    if (title) _thesesLower.set(Number(k), stripAccents(title).toLowerCase());
   }
 
   return {
@@ -195,6 +199,7 @@ function buildCSRStore(core, edges, theses) {
       total_scholars: N,
       total_edges: E,
     },
+    repoList,
     theses: thesesMap,
     _thesesLower,
     stuDeg,
@@ -209,6 +214,34 @@ function buildCSRStore(core, edges, theses) {
     _visGen: 0,
     _bfsQueue: new Int32Array(N),
     _descCache: new Map(),
+  };
+}
+
+function decodeThesis(st, idx) {
+  const raw = st.theses[idx];
+  if (!raw) return null;
+  if (!Array.isArray(raw)) return raw;
+  const [title, rIdx, rid, customUrl, customPdf, doi, flags] = raw;
+  const repo = st.repoList[rIdx] || "MGP";
+  let url = customUrl || "";
+  let pdf = customPdf || "";
+  if (!url && rid) {
+    if (repo === "HAL/TEL") url = `https://theses.hal.science/${rid}`;
+    else if (repo === "theses.fr") url = `https://theses.fr/${rid}`;
+    else if (repo === "DataCite") url = `https://doi.org/${rid}`;
+    else if (repo === "MGP") url = `https://www.genealogy.math.ndsu.nodak.edu/id.php?id=${rid}`;
+  }
+  if (pdf === "1" && repo === "HAL/TEL" && rid) {
+    pdf = `https://theses.hal.science/${rid}/document`;
+  }
+  return {
+    t: title || "",
+    r: repo,
+    id: rid || "",
+    url,
+    pdf,
+    doi: doi || "",
+    verified: Boolean((flags || 0) & 1),
   };
 }
 
@@ -228,7 +261,7 @@ export async function ensureLocalStore(forceReload = false) {
 }
 
 function scholarSummary(st, idx) {
-  const th = st.theses[String(idx)] || null;
+  const th = decodeThesis(st, idx);
   const univ = st.ui[idx] >= 0 ? st.u[st.ui[idx]] : "";
   const advisors = [];
   const aStart = st.advOff[idx];
@@ -394,7 +427,7 @@ export const localEngine = {
       if (statusFlag !== -1 && st.f[i] !== statusFlag) continue;
 
       if (repo !== "all") {
-        const th = st.theses[i];
+        const th = decodeThesis(st, i);
         if (!th || !th.verified || th.r !== repo) continue;
       }
 
@@ -469,7 +502,7 @@ export const localEngine = {
     const idx = Number(id) - 1;
     if (idx < 0 || idx >= st.N) throw new Error("Scholar not found");
 
-    const th = st.theses[String(idx)] || null;
+    const th = decodeThesis(st, idx);
     const univ = st.ui[idx] >= 0 ? st.u[st.ui[idx]] : "";
     const mscFull = th?.msc || "";
     const mscParts = mscFull ? mscFull.split(/\s*[—–-]\s*/) : [];
@@ -532,7 +565,7 @@ export const localEngine = {
     const limitEnd = Math.min(sEnd, sStart + 120);
     for (let p = sStart; p < limitEnd; p++) {
       const si = st.stuData[p];
-      const sth = st.theses[String(si)] || null;
+      const sth = decodeThesis(st, si);
       const [dCnt, totDesc] = countTotalDescendants(st, si);
       students.push({
         id: si + 1,
@@ -617,7 +650,7 @@ export const localEngine = {
 
     const nodes = [];
     for (const [idx, level] of levels.entries()) {
-      const th = st.theses[String(idx)] || null;
+      const th = decodeThesis(st, idx);
       nodes.push({
         id: idx + 1,
         name: st.n[idx],

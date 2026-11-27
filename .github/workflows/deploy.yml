@@ -32,7 +32,7 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Build Full-Scale 265K+ Genealogy Dataset
+      - name: Build Ultra-Scale 440K+ Genealogy Dataset
         run: |
           pip install pypdf
           python3 -u backend/scripts/build_full_scale.py
@@ -41,12 +41,14 @@ jobs:
           core = json.loads(gzip.open('frontend/public/data/core.json.gz', 'rb').read())
           edges = json.loads(gzip.open('frontend/public/data/edges.json.gz', 'rb').read())
           theses = json.loads(gzip.open('frontend/public/data/theses.json.gz', 'rb').read())
-          assert len(core['n']) > 250000, f'Too few scholars: {len(core[\"n\"])}'
-          assert len(edges['a']) > 250000, f'Too few edges: {len(edges[\"a\"])}'
+          assert len(core['n']) > 380000, f'Too few scholars: {len(core[\"n\"])}'
+          assert len(edges['a']) > 400000, f'Too few edges: {len(edges[\"a\"])}'
+          assert len(theses['d']) > 30000, f'Too few theses: {len(theses[\"d\"])}'
           names_lower = {x.lower() for x in core['n']}
           assert 'leyi zhu' in names_lower, 'Missing Leyi Zhu'
+          assert 'tianrui dai' in names_lower, 'Missing Tianrui Dai'
           assert 'pat hanrahan' in names_lower, 'Missing Pat Hanrahan'
-          print('CI dataset integrity verified:', len(core['n']), 'scholars,', len(edges['a']), 'edges,', len(theses), 'theses')
+          print('CI dataset integrity verified:', len(core['n']), 'scholars,', len(edges['a']), 'edges,', len(theses['d']), 'theses')
           "
 
       - name: Setup Node

@@ -9,4 +9,6 @@ data/genealogy.db-wal
 .env
 frontend/public/data/*.gz
 frontend/public/data/genealogy-bundle.json
+data/qlever_cache/
+
 

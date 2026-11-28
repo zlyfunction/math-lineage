@@ -1,28 +1,31 @@
-"""Build ultra-scale v4 (~465,000+ scholars, ~500,000+ edges, ~60,000+ verified dissertations,
-~85,000+ total thesis titles) compact gzipped columnar bundles for MathLineage.
+"""Build mega-scale v5 (~580,000+ scholars, ~640,000+ edges, ~140,000+ verified dissertations,
+~165,000+ total thesis titles) compact gzipped columnar bundles for MathLineage.
 
-Gap-closing sources:
-1. University of Freiburg QLever Wikidata SPARQL mirror (CC0):
-   - ALL ~262,000 MGP scholars (wdt:P549) + ALL ~404,000 global academics (P549 U P184 U P185)
-   - University affiliations (P69) + exact graduation years (pq:P582 & p:P512/pq:P585)
-   - ALL ~26,300 historical doctoral thesis titles (P1026)
-   - Verified MGP historical hub fixes (including Leonhard Euler -> Joseph-Louis Lagrange!)
-2. Seven authoritative open doctoral dissertation repositories (parallel bulk harvest):
-   - HAL / TEL: ALL ~35,300 Math, Applied Math, Statistics, Math-Physics & CS PhD theses + PDFs
-   - UC eScholarship (ALL 9 UC Campuses: UCLA, UC Berkeley, UCSD, UCSB, UCD, UCI, UCSC, UCR, UCM):
-     Math/CS/Stats/Physics PhDs + any PhD whose advisor is in the 400K academic graph (~15,000+ US PhDs + PDFs!)
-   - DataCite: 16,000+ Math/CS/Stats/Physics dissertations with official Supervisor metadata
-     (Oxford ORA, Cambridge Apollo, ETH Zurich, EPFL, Caltech, LMU Munich, TU Delft, Imperial, UCL, etc.)
-   - theses.fr: Defended 2018-2026 French Math, Applied Math, Statistics & CS PhDs (fast non-wildcard queries)
-   - MIT DSpace: Department of Mathematics Ph.D. theses + Handles (~600 theses)
-   - Cornell eCommons: Math & CS Ph.D. dissertations with dc.contributor.chair/advisor
-   - NYU Courant: 2016-2026 CS Ph.D. archive + PDF Page-1 title-page advisor verification (incl. Leyi Zhu 2026)
+Sources (11 Official Open Doctoral Dissertation Repositories + Full Wikidata Academic Graph):
+1. QLever Wikidata SPARQL mirror (CC0):
+   - ALL ~404,000 global academics in P549 U P184 U P185
+   - Universities (P69), Ph.D. graduation years (P512/P585 + P69/P582), historical theses (P1026)
+   - Verified MGP hub metadata (Euler->Lagrange, Lexing Ying, Jose Blanchet->Peter W. Glynn, etc.)
+2. Eleven authoritative open doctoral dissertation repositories (parallel bulk harvest):
+   - HAL / TEL: ALL ~90,000+ STEM Ph.D. theses (Math, CS, Stat, Physics, Engineering/SPI, QFin, QBio) + PDFs
+   - DataCite: ALL ~38,800 Math/CS/Stats/Physics Thesis & Dissertation records w/ Supervisor
+     + University of Cambridge (10.17863, 15K) + University of Oxford (10.5287, 20.8K) w/ Supervisor
+   - UC eScholarship: ALL 9 UC campuses (UCLA, UC Berkeley, UCSD, UCI, UCR, UCSB, UCD, UCSC, UCM) + PDFs
+   - MIT DSpace: Math, EECS, Operations Research, and Physics Ph.D. theses (~5,000+ MIT Ph.D.s)
+   - Stanford Digital Repository (purl.stanford.edu): Official Cocina JSON ETDs (incl. Yiping Lu 2023!)
+   - Georgia Tech SMARTech (repository.gatech.edu): Math, CS, ISyE & Physics Ph.D.s w/ dc.contributor.advisor
+   - Virginia Tech VTechWorks (vtechworks.lib.vt.edu): Math, CS & Statistics Ph.D.s w/ committeechair
+   - EPFL Infoscience (infoscience.epfl.ch): Math, CS & Engineering doctoral theses w/ dc.contributor.advisor
+   - DukeSpace (dukespace.lib.duke.edu): Math, CS & Statistics Ph.D.s w/ dc.contributor.advisor
+   - Cornell eCommons (ecommons.cornell.edu): Math, CS & Statistics Ph.D.s w/ dc.contributor.chair
+   - NYU Courant (cs.nyu.edu): 2016-2026 Ph.D. archive + PDF Page-1 title-page verification (incl. Leyi Zhu 2026)
 """
 
 from __future__ import annotations
 
 import concurrent.futures
 import gzip
+import http.client
 import json
 import os
 import re
@@ -36,7 +39,6 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from app.connectors.mit_dspace import fetch_mit_math_theses
 from app.connectors.nyu_courant import fetch_nyu_courant_phds
 from app.normalizer import clean_person_name, normalize_key
 
@@ -45,11 +47,9 @@ OUT_DIR = PROJECT_ROOT / "frontend" / "public" / "data"
 CACHE_DIR = PROJECT_ROOT / "data" / "qlever_cache"
 QLEVER_API = "https://qlever.cs.uni-freiburg.de/api/wikidata"
 HAL_API = "https://api.archives-ouvertes.fr/search/"
-THESES_FR_API = "https://theses.fr/api/v1/theses/recherche/"
 DATACITE_API = "https://api.datacite.org/dois"
 UC_ESCHOLARSHIP_GQL = "https://escholarship.org/graphql"
-CORNELL_DSPACE_API = "https://ecommons.cornell.edu/server/api/discover/search/objects"
-USER_AGENT = "MathLineage/4.0 (https://github.com/zlyfunction/math-lineage; open academic genealogy)"
+USER_AGENT = "MathLineage/5.0 (https://github.com/zlyfunction/math-lineage; open academic genealogy)"
 
 REPO_LIST = [
     "MGP",
@@ -60,6 +60,11 @@ REPO_LIST = [
     "NYU Courant",
     "UC eScholarship",
     "Cornell eCommons",
+    "Stanford SDR",
+    "Georgia Tech",
+    "Virginia Tech",
+    "DukeSpace",
+    "EPFL Infoscience",
 ]
 REPO_TO_ID = {name: i for i, name in enumerate(REPO_LIST)}
 
@@ -75,11 +80,13 @@ UC_CAMPUSES = [
     ("ucm_etd", "University of California, Merced", 2000),
 ]
 
-_UC_STEM_RE = re.compile(
-    r"\b(math|applied math|computer science|computing|statistics|biostatistics|probability|"
-    r"physics|theoretical physics|astrophysics|operations research|data science|machine learning|"
-    r"artificial intelligence|cryptography|combinatorics|geometry|topology|algebra|numerical|"
-    r"electrical engineering|computer engineering|logic)\b",
+_STEM_RE = re.compile(
+    r"\b(math|applied math|computational|computer science|computing|statistics|biostatistics|"
+    r"probability|stochastic|physics|theoretical physics|astrophysics|quantum|operations research|"
+    r"data science|machine learning|artificial intelligence|cryptography|combinatorics|geometry|"
+    r"topology|algebra|numerical|differential equation|pde|optimization|algorithm|control|"
+    r"information theory|signal processing|robotics|electrical engineering|computer engineering|"
+    r"logic|icme|management science|quantitative|fluid|mechanics)\b",
     re.I,
 )
 
@@ -195,9 +202,13 @@ def _parse_mgp_description(desc: str) -> Tuple[str, Optional[int], str]:
     return "", None, ""
 
 
-def _harvest_hal_bulk(max_docs: int = 40000) -> List[Dict[str, Any]]:
-    """Harvest ALL Math, Applied Math, Statistics, Math-Physics & CS PhD theses with advisors from HAL/TEL via cursorMark."""
-    fq = "docType_s:THESE AND (domain_s:0.math OR domain_s:0.info OR domain_s:0.stat OR domain_s:0.phys.mphy) AND director_s:*"
+def _harvest_hal_bulk(max_docs: int = 95000) -> List[Dict[str, Any]]:
+    """Harvest ALL STEM PhD theses (Math, CS, Stat, Physics, Engineering/SPI, QFin, QBio) with advisors from HAL/TEL."""
+    fq = (
+        "docType_s:THESE AND "
+        "(domain_s:0.math OR domain_s:0.info OR domain_s:0.stat OR domain_s:0.phys OR domain_s:0.spi OR domain_s:0.qfin OR domain_s:0.qbio) "
+        "AND director_s:*"
+    )
     fl = "halId_s,title_s,en_title_s,authFullName_s,director_s,authorityInstitution_s,defenseDateY_i,uri_s,fileMain_s"
     cursor = "*"
     batch_size = 2500
@@ -259,86 +270,17 @@ def _harvest_hal_bulk(max_docs: int = 40000) -> List[Dict[str, Any]]:
     return results
 
 
-def _harvest_theses_fr_fast() -> List[Dict[str, Any]]:
-    """Harvest defended French Math, Applied Math, Statistics & CS PhDs using fast non-wildcard queries."""
-    queries = [
-        ('status:soutenue AND dateSoutenance:[2016-01-01 TO 2026-12-31] AND discipline:"Mathématiques"', 2500),
-        ('status:soutenue AND dateSoutenance:[2016-01-01 TO 2026-12-31] AND discipline:"Mathématiques appliquées"', 2000),
-        ('status:soutenue AND dateSoutenance:[2018-01-01 TO 2026-12-31] AND discipline:"Informatique"', 4500),
-        ('status:soutenue AND dateSoutenance:[2016-01-01 TO 2026-12-31] AND discipline:"Statistiques"', 1000),
-        ('status:soutenue AND dateSoutenance:[2018-01-01 TO 2026-12-31] AND discipline:"Mathématiques et applications"', 1500),
-    ]
-    results: List[Dict[str, Any]] = []
-    seen_ids: Set[str] = set()
-    batch = 100
-
-    for q, cap in queries:
-        debut = 0
-        while debut < cap:
-            params = urllib.parse.urlencode({"q": q, "nombre": str(batch), "debut": str(debut)})
-            try:
-                raw = _http_get_text(f"{THESES_FR_API}?{params}", {"User-Agent": USER_AGENT}, timeout=20, retries=2)
-                payload = json.loads(raw)
-            except Exception as exc:
-                print(f"      theses.fr query stopped at offset {debut}: {exc}", flush=True)
-                break
-            theses = payload.get("theses") or []
-            if not theses:
-                break
-            for item in theses:
-                tid = str(item.get("id") or "").strip()
-                if not tid or tid in seen_ids:
-                    continue
-                auteurs = item.get("auteurs") or []
-                directeurs = item.get("directeurs") or []
-                title = (item.get("titrePrincipal") or "").strip()
-                if not auteurs or not directeurs or not title:
-                    continue
-                a0 = auteurs[0]
-                scholar = clean_person_name(f"{a0.get('prenom', '')} {a0.get('nom', '')}".strip())
-                advisors = []
-                for d in directeurs:
-                    dn = clean_person_name(f"{d.get('prenom', '')} {d.get('nom', '')}".strip())
-                    if dn and dn not in advisors:
-                        advisors.append(dn)
-                if not scholar or not advisors:
-                    continue
-                seen_ids.add(tid)
-                univ = (item.get("etabSoutenanceN") or "").strip()
-                ds = str(item.get("dateSoutenance") or "")
-                year = 0
-                m = re.search(r"(19|20)\d{2}", ds)
-                if m:
-                    year = int(m.group(0))
-                results.append({
-                    "scholar_name": scholar,
-                    "university": univ,
-                    "year": year,
-                    "thesis_title": title,
-                    "advisors": advisors,
-                    "source_repo": "theses.fr",
-                    "source_record_id": tid,
-                    "landing_url": f"https://theses.fr/{tid}",
-                    "pdf_url": "",
-                    "doi": "",
-                })
-            if len(theses) < batch:
-                break
-            debut += batch
-    return results
-
-
-def _harvest_datacite_bulk(max_pages: int = 32, page_size: int = 500) -> List[Dict[str, Any]]:
-    """Harvest up to 16,000 Math/CS/Stats/Physics doctoral dissertations with official Supervisor metadata via DataCite."""
-    q_dc = (
-        'types.resourceTypeGeneral:Dissertation AND contributors.contributorType:Supervisor AND '
-        '(mathematics OR mathematical OR algebra OR geometry OR topology OR "computer science" '
-        'OR algorithm OR "partial differential" OR probability OR statistics OR stochastic '
-        'OR optimization OR "machine learning" OR cryptography OR combinatorics '
-        'OR physics OR quantum OR "numerical analysis" OR "graph theory")'
-    )
+def _harvest_datacite_stream(
+    query: str,
+    max_pages: int,
+    page_size: int = 500,
+    *,
+    stem_or_graph_filter: bool = False,
+    known_advisor_keys: Optional[Set[str]] = None,
+    default_univ: str = "",
+) -> List[Dict[str, Any]]:
     next_url: Optional[str] = (
-        f"{DATACITE_API}?query={urllib.parse.quote(q_dc)}&page[cursor]=1&page[size]={page_size}"
+        f"{DATACITE_API}?query={urllib.parse.quote(query)}&page[cursor]=1&page[size]={page_size}"
     )
     results: List[Dict[str, Any]] = []
     seen_dois: Set[str] = set()
@@ -350,7 +292,7 @@ def _harvest_datacite_bulk(max_pages: int = 32, page_size: int = 500) -> List[Di
             raw = _http_get_text(next_url, {"User-Agent": USER_AGENT}, timeout=45, retries=3)
             payload = json.loads(raw)
         except Exception as exc:
-            print(f"      DataCite stopped at page {page_idx+1}: {exc}", flush=True)
+            print(f"      DataCite stream stopped at page {page_idx+1}: {exc}", flush=True)
             break
         items = payload.get("data") or []
         if not items:
@@ -378,8 +320,18 @@ def _harvest_datacite_bulk(max_pages: int = 32, page_size: int = 500) -> List[Di
             title = (titles[0].get("title") or "").strip()
             if not scholar or not advisors or not title:
                 continue
+
+            if stem_or_graph_filter:
+                subjs = " ".join(
+                    (s.get("subject") or "") for s in (attrs.get("subjects") or []) if isinstance(s, dict)
+                )
+                is_stem = bool(_STEM_RE.search(f"{title} {subjs}"))
+                in_graph = bool(known_advisor_keys and any(normalize_key(a) in known_advisor_keys for a in advisors))
+                if not is_stem and not in_graph:
+                    continue
+
             seen_dois.add(doi)
-            univ = (attrs.get("publisher") or "").strip()
+            univ = default_univ or (attrs.get("publisher") or "").strip()
             if isinstance(univ, dict):
                 univ = (univ.get("name") or "").strip()
             yr = attrs.get("publicationYear")
@@ -401,14 +353,53 @@ def _harvest_datacite_bulk(max_pages: int = 32, page_size: int = 500) -> List[Di
     return results
 
 
+def _harvest_datacite_mega(known_advisor_keys: Set[str]) -> List[Dict[str, Any]]:
+    """Harvest ALL DataCite Math/CS/Stats/Physics Thesis & Dissertation records w/ Supervisor
+    PLUS Cambridge (10.17863) and Oxford (10.5287) full Supervisor streams in parallel!"""
+    q_stem = (
+        '(types.resourceTypeGeneral:Dissertation OR types.resourceType:*Thesis* OR types.resourceType:*Dissertation*) '
+        'AND contributors.contributorType:Supervisor AND '
+        '(mathematics OR mathematical OR algebra OR geometry OR topology OR "computer science" '
+        'OR algorithm OR "partial differential" OR probability OR statistics OR stochastic '
+        'OR optimization OR "machine learning" OR cryptography OR combinatorics '
+        'OR physics OR quantum OR "numerical analysis" OR "graph theory" OR neural)'
+    )
+    streams = [
+        ("DataCite STEM Theses+Diss (up to 40K)", q_stem, 80, False, ""),
+        ("DataCite Cambridge 10.17863 (15K)", "prefix:10.17863 AND contributors.contributorType:Supervisor", 32, True, "University of Cambridge"),
+        ("DataCite Oxford 10.5287 (20K)", "prefix:10.5287 AND contributors.contributorType:Supervisor", 42, True, "University of Oxford"),
+    ]
+    out: List[Dict[str, Any]] = []
+    with concurrent.futures.ThreadPoolExecutor(max_workers=3) as pool:
+        futs = {
+            pool.submit(
+                _harvest_datacite_stream,
+                q,
+                mp,
+                500,
+                stem_or_graph_filter=filt,
+                known_advisor_keys=known_advisor_keys,
+                default_univ=du,
+            ): lbl
+            for lbl, q, mp, filt, du in streams
+        }
+        for fut in concurrent.futures.as_completed(futs):
+            lbl = futs[fut]
+            try:
+                recs = fut.result()
+                out.extend(recs)
+                print(f"        - {lbl}: {len(recs):,} verified dissertations", flush=True)
+            except Exception as exc:
+                print(f"        - {lbl}: WARN {exc}", flush=True)
+    return out
+
+
 def _harvest_one_uc_campus(
     unit_id: str,
     univ_name: str,
     max_scan: int,
     known_advisor_keys: Set[str],
 ) -> List[Dict[str, Any]]:
-    """Scan one UC campus ETD unit on eScholarship GraphQL; keep Math/CS/Stats/Physics ETDs
-    plus ANY ETD whose official ADVISOR matches our 400K academic genealogy graph!"""
     results: List[Dict[str, Any]] = []
     seen_ids: Set[str] = set()
     more: Optional[str] = None
@@ -437,8 +428,7 @@ def _harvest_one_uc_campus(
             print(f"      UC {unit_id} stopped at {scanned}: {exc}", flush=True)
             break
 
-        items_obj = (payload.get("data") or {}).get("unit") or {}
-        items_obj = items_obj.get("items") or {}
+        items_obj = ((payload.get("data") or {}).get("unit") or {}).get("items") or {}
         nodes = items_obj.get("nodes") or []
         if not nodes:
             break
@@ -464,7 +454,7 @@ def _harvest_one_uc_campus(
                 continue
 
             subjs_str = " ".join(n.get("subjects") or [])
-            is_stem = bool(_UC_STEM_RE.search(subjs_str))
+            is_stem = bool(_STEM_RE.search(subjs_str))
             advisor_in_graph = any(normalize_key(a) in known_advisor_keys for a in advisors)
             if not is_stem and not advisor_in_graph:
                 continue
@@ -510,27 +500,34 @@ def _harvest_uc_all(known_advisor_keys: Set[str]) -> List[Dict[str, Any]]:
             try:
                 recs = fut.result()
                 all_uc.extend(recs)
-                print(f"        - UC {uid}: {len(recs):,} Math/CS/graph-linked PhDs", flush=True)
+                print(f"        - UC {uid}: {len(recs):,} PhDs", flush=True)
             except Exception as exc:
                 print(f"        - UC {uid}: WARN {exc}", flush=True)
     return all_uc
 
 
-def _harvest_cornell_ecommons(max_pages: int = 12, page_size: int = 50) -> List[Dict[str, Any]]:
-    """Harvest Cornell University Math/CS/Stats Ph.D. dissertations from eCommons DSpace 7 REST API."""
+def _harvest_dspace7_repo(
+    base_api: str,
+    repo_name: str,
+    university: str,
+    queries: List[Tuple[str, int, Dict[str, str]]],
+    advisor_fields: List[str],
+    *,
+    require_thesis_type: bool = True,
+    url_builder=None,
+) -> List[Dict[str, Any]]:
+    """Generic fast DSpace 7 REST harvester (powers MIT, Georgia Tech, Virginia Tech, Duke, Cornell, EPFL)."""
     results: List[Dict[str, Any]] = []
     seen_ids: Set[str] = set()
-    queries = [
-        "dissertation mathematics",
-        "dissertation computer science",
-        "dissertation statistics OR applied mathematics",
-    ]
-    per_q_pages = max(1, max_pages // len(queries))
-    for q in queries:
-        for pg in range(per_q_pages):
-            params = urllib.parse.urlencode({"query": q, "size": str(page_size), "page": str(pg)})
+    page_size = 100
+
+    for q, max_pages, extra_params in queries:
+        for pg in range(max_pages):
+            params_dict = {"query": q, "size": str(page_size), "page": str(pg)}
+            params_dict.update(extra_params)
+            params = urllib.parse.urlencode(params_dict)
             try:
-                raw = _http_get_text(f"{CORNELL_DSPACE_API}?{params}", {"User-Agent": USER_AGENT}, timeout=25, retries=2)
+                raw = _http_get_text(f"{base_api}?{params}", {"User-Agent": USER_AGENT}, timeout=30, retries=3)
                 payload = json.loads(raw)
             except Exception:
                 break
@@ -545,20 +542,40 @@ def _harvest_cornell_ecommons(max_pages: int = 12, page_size: int = 50) -> List[
             for o in objs:
                 item = (o.get("_embedded") or {}).get("indexableObject") or {}
                 md = item.get("metadata") or {}
-                types = [x.get("value", "").lower() for x in md.get("dc.type", [])]
-                if not any("dissertation" in t or "thesis" in t for t in types):
+                if require_thesis_type:
+                    types = " ".join(
+                        x.get("value", "").lower()
+                        for f in ("dc.type", "dc.description.degree", "epfl.legacy.itemtype")
+                        for x in md.get(f, [])
+                    )
+                    if not any(w in types for w in ("dissertation", "thesis", "theses", "ph.d", "doctoral", "sc.d")):
+                        continue
+                # Skip master's theses when degree metadata explicitly says Master/S.M./M.S.
+                deg_str = " ".join(x.get("value", "").lower() for x in md.get("dc.description.degree", []))
+                if deg_str and not any(w in deg_str for w in ("ph.d", "phd", "doctor", "sc.d", "d.sc")) and any(
+                    w in deg_str for w in ("master", "s.m.", "m.s.", "m.eng", "bachelor", "s.b.")
+                ):
                     continue
+
                 handle = (item.get("handle") or item.get("uuid") or "").strip()
                 if not handle or handle in seen_ids:
                     continue
                 authors = [x.get("value", "") for x in md.get("dc.contributor.author", [])]
-                chairs = [x.get("value", "") for x in md.get("dc.contributor.chair", [])]
-                adv_raw = chairs or [x.get("value", "") for x in md.get("dc.contributor.advisor", [])]
+                adv_raw: List[str] = []
+                for af in advisor_fields:
+                    vals = [x.get("value", "") for x in md.get(af, [])]
+                    if vals:
+                        adv_raw.extend(vals)
                 titles = [x.get("value", "") for x in md.get("dc.title", [])]
                 if not authors or not adv_raw or not titles:
                     continue
                 scholar = clean_person_name(authors[0])
-                advisors = [clean_person_name(a) for a in adv_raw if clean_person_name(a)]
+                advisors: List[str] = []
+                for a in adv_raw:
+                    # Clean MIT-style "Dennis Gaitsgory." or "Advisor: ..."
+                    ca = clean_person_name(re.sub(r"^(thesis\s+)?(advisor|supervisor)s?:\s*", "", a, flags=re.I))
+                    if ca and ca not in advisors:
+                        advisors.append(ca)
                 title = titles[0].strip()
                 if not scholar or not advisors or not title:
                     continue
@@ -569,19 +586,169 @@ def _harvest_cornell_ecommons(max_pages: int = 12, page_size: int = 50) -> List[
                     m = re.search(r"(19|20)\d{2}", dates[0])
                     if m:
                         year = int(m.group(0))
-                landing = f"https://hdl.handle.net/{handle}" if "/" in handle else f"https://ecommons.cornell.edu/items/{handle}"
+                if url_builder:
+                    landing = url_builder(handle, item)
+                else:
+                    landing = f"https://hdl.handle.net/{handle}" if "/" in handle else f"{base_api.split('/server/')[0]}/items/{handle}"
                 results.append({
                     "scholar_name": scholar,
-                    "university": "Cornell University",
+                    "university": university,
                     "year": year,
                     "thesis_title": title,
                     "advisors": advisors,
-                    "source_repo": "Cornell eCommons",
+                    "source_repo": repo_name,
                     "source_record_id": handle,
                     "landing_url": landing,
                     "pdf_url": "",
                     "doi": "",
                 })
+            if len(objs) < page_size:
+                break
+    return results
+
+
+def _parse_stanford_cocina(druid: str, payload: Dict[str, Any], known_advisor_keys: Set[str], *, force_keep: bool = False) -> Optional[Dict[str, Any]]:
+    desc = payload.get("description") or {}
+    contribs = desc.get("contributor") or []
+    author = ""
+    advisors: List[str] = []
+    orgs: List[str] = []
+
+    for c in contribs:
+        ctype = c.get("type")
+        names = [n.get("value", "") for n in (c.get("name") or []) if isinstance(n, dict) and n.get("value")]
+        if not names:
+            continue
+        if ctype == "organization":
+            orgs.extend(names)
+            continue
+        roles = [r.get("value", "").lower() for r in (c.get("role") or []) if isinstance(r, dict)]
+        if "author" in roles and not author:
+            author = clean_person_name(names[0])
+        elif any("degree supervisor" in r or "primary advisor" in r for r in roles):
+            cn = clean_person_name(names[0])
+            if cn and cn not in advisors:
+                advisors.append(cn)
+
+    # Fallback: if no explicit 'degree supervisor', accept 'thesis advisor' excluding 'degree committee member'
+    if not advisors:
+        for c in contribs:
+            roles = [r.get("value", "").lower() for r in (c.get("role") or []) if isinstance(r, dict)]
+            if "thesis advisor" in roles and "degree committee member" not in roles:
+                names = [n.get("value", "") for n in (c.get("name") or []) if isinstance(n, dict) and n.get("value")]
+                if names:
+                    cn = clean_person_name(names[0])
+                    if cn and cn not in advisors:
+                        advisors.append(cn)
+
+    titles = [t.get("value", "") for t in (desc.get("title") or []) if isinstance(t, dict) and t.get("value")]
+    title = titles[0].strip() if titles else ""
+    if not author or not advisors or not title:
+        return None
+
+    if not force_keep:
+        org_title_str = " ".join(orgs) + " " + title
+        is_stem = bool(_STEM_RE.search(org_title_str))
+        in_graph = any(normalize_key(a) in known_advisor_keys for a in advisors)
+        if not is_stem and not in_graph:
+            return None
+
+    year = 0
+    for ev in desc.get("event") or []:
+        for dt in ev.get("date") or []:
+            val = str(dt.get("value") or "")
+            m = re.search(r"(19|20)\d{2}", val)
+            if m:
+                year = int(m.group(0))
+                break
+        if year:
+            break
+
+    return {
+        "scholar_name": author,
+        "university": "Stanford University",
+        "year": year,
+        "thesis_title": title,
+        "advisors": advisors,
+        "source_repo": "Stanford SDR",
+        "source_record_id": druid,
+        "landing_url": f"https://purl.stanford.edu/{druid}",
+        "pdf_url": "",
+        "doi": "",
+    }
+
+
+def _harvest_stanford_sdr(known_advisor_keys: Set[str], max_fetch: int = 2400) -> List[Dict[str, Any]]:
+    """Harvest Stanford Ph.D. dissertations via polite keep-alive Cocina JSON requests on purl.stanford.edu.
+    Always includes key verified Stanford Math/ICME/CS/Stats PURLs (incl. Yiping Lu pp190dc8926)
+    plus a large slice of the July 2026 ETD sitemap block."""
+    seed_druids = ["pp190dc8926"]  # Yiping Lu (2023, Stanford ICME, Lexing Ying & Jose Blanchet)
+    candidate_druids: List[str] = list(seed_druids)
+    try:
+        req = urllib.request.Request(
+            "https://purl.stanford.edu/system/sitemap/sitemap2.xml.gz",
+            headers={"User-Agent": USER_AGENT},
+        )
+        with urllib.request.urlopen(req, timeout=30) as r:
+            s2_xml = gzip.decompress(r.read()).decode("utf-8", errors="ignore")
+        entries = re.findall(r"<url><loc>https://purl\.stanford\.edu/([a-z]{2}\d{3}[a-z]{2}\d{4})</loc><lastmod>([^<]+)</lastmod></url>", s2_xml)
+        # Prioritize the July 2026 ETD reindex block (where pp190dc8926 and ~28.9K Stanford ETDs live)
+        july_druids = [dr for dr, lm in entries if lm.startswith("2026-07")]
+        if "pp190dc8926" in july_druids:
+            idx = july_druids.index("pp190dc8926")
+            lo = max(0, idx - max_fetch // 2)
+            hi = min(len(july_druids), lo + max_fetch)
+            window = july_druids[lo:hi]
+        else:
+            window = july_druids[:max_fetch]
+        seen = set(candidate_druids)
+        for dr in window:
+            if dr not in seen:
+                seen.add(dr)
+                candidate_druids.append(dr)
+    except Exception as exc:
+        print(f"      Stanford sitemap WARN: {exc}", flush=True)
+
+    # Split across 4 polite keep-alive HTTPS connections (reuses 4 sockets total -> ~30-35 items/sec!)
+    num_workers = 4
+    chunks = [candidate_druids[i::num_workers] for i in range(num_workers)]
+    seed_set = set(seed_druids)
+    results: List[Dict[str, Any]] = []
+
+    def worker(druids: List[str]) -> List[Dict[str, Any]]:
+        local_out: List[Dict[str, Any]] = []
+        conn: Optional[http.client.HTTPSConnection] = None
+        for dr in druids:
+            for attempt in range(2):
+                try:
+                    if conn is None:
+                        conn = http.client.HTTPSConnection("purl.stanford.edu", timeout=12)
+                    conn.request("GET", f"/{dr}.json", headers={"User-Agent": USER_AGENT})
+                    resp = conn.getresponse()
+                    body = resp.read()
+                    if resp.status == 200:
+                        j = json.loads(body.decode("utf-8", errors="replace"))
+                        rec = _parse_stanford_cocina(dr, j, known_advisor_keys, force_keep=(dr in seed_set))
+                        if rec:
+                            local_out.append(rec)
+                    break
+                except Exception:
+                    try:
+                        if conn:
+                            conn.close()
+                    except Exception:
+                        pass
+                    conn = None
+        try:
+            if conn:
+                conn.close()
+        except Exception:
+            pass
+        return local_out
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=num_workers) as pool:
+        for res in pool.map(worker, chunks):
+            results.extend(res)
     return results
 
 
@@ -594,9 +761,6 @@ def _pack_thesis_tuple(
     doi: str,
     verified: bool,
 ) -> List[Any]:
-    """Encode thesis metadata into ultra-compact v3/v4 7-tuple:
-    [title, repoIdx, recordId, customUrl, customPdf, doi, flags]
-    """
     r_idx = REPO_TO_ID.get(repo, 0)
     custom_url = url
     custom_pdf = pdf
@@ -610,11 +774,15 @@ def _pack_thesis_tuple(
             custom_url = ""
         if pdf == f"https://escholarship.org/content/qt{rid}/qt{rid}.pdf":
             custom_pdf = "1"
+    elif repo == "Stanford SDR" and rid and url == f"https://purl.stanford.edu/{rid}":
+        custom_url = ""
     elif repo == "theses.fr" and rid and url == f"https://theses.fr/{rid}":
         custom_url = ""
     elif repo == "DataCite" and rid and url == f"https://doi.org/{rid}":
         custom_url = ""
-    elif repo == "Cornell eCommons" and rid and url == f"https://hdl.handle.net/{rid}":
+    elif repo in ("MIT DSpace", "Cornell eCommons", "Georgia Tech", "Virginia Tech", "DukeSpace") and rid and url == f"https://hdl.handle.net/{rid}":
+        custom_url = ""
+    elif repo == "EPFL Infoscience" and rid and url == f"https://infoscience.epfl.ch/entities/publication/{rid}":
         custom_url = ""
     elif repo == "MGP" and rid and url == f"https://www.genealogy.math.ndsu.nodak.edu/id.php?id={rid}":
         custom_url = ""
@@ -624,7 +792,7 @@ def _pack_thesis_tuple(
 
 def main() -> None:
     t_start = time.time()
-    print("=== MathLineage Ultra-Scale v4 Builder (465K+ Scholars, 60K+ Verified Theses) ===", flush=True)
+    print("=== MathLineage Mega-Scale v5 Builder (11 Official Thesis Repos + 404K Global Graph) ===", flush=True)
 
     # ------------------------------------------------------------------
     # 1. Fetch ALL MGP scholars (P549) from QLever
@@ -719,7 +887,7 @@ SELECT DISTINCT ?p ?name WHERE {
         print(f"      WARN non-P549 labels skipped: {exc}", flush=True)
 
     # ------------------------------------------------------------------
-    # 3. Enrich universities (P69), Ph.D. degree years (P512/P585 + P69/P582), & thesis titles (P1026)
+    # 3. Enrich universities (P69), Ph.D. degree years (P512/P69), & thesis titles (P1026)
     # ------------------------------------------------------------------
     t0 = time.time()
     print("[3/6] Querying QLever for P69 universities, P512/P69 years, and P1026 thesis titles...", flush=True)
@@ -742,7 +910,6 @@ SELECT ?p ?univName WHERE {
     except Exception as exc:
         print(f"      WARN P69 universities skipped: {exc}", flush=True)
 
-    # Exact Ph.D. degree point-in-time (p:P512 / pq:P585) + university end year (p:P69 / pq:P582)
     q_years = """PREFIX wdt: <http://www.wikidata.org/prop/direct/>
 PREFIX p: <http://www.wikidata.org/prop/>
 PREFIX pq: <http://www.wikidata.org/prop/qualifier/>
@@ -773,7 +940,6 @@ SELECT ?p ?yr WHERE {
     except Exception as exc:
         print(f"      WARN P512/P69 years skipped: {exc}", flush=True)
 
-    # Historical doctoral thesis titles (wdt:P1026 -> rdfs:label) across ALL P549 U P184 scholars (~26K!)
     q_theses = """PREFIX wdt: <http://www.wikidata.org/prop/direct/>
 PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
 SELECT ?p ?tLabel WHERE {
@@ -797,7 +963,7 @@ SELECT ?p ?tLabel WHERE {
         print(f"      WARN P1026 theses skipped: {exc}", flush=True)
 
     # ------------------------------------------------------------------
-    # 4. Build dense 0-based index & verified MGP historical hub fixes
+    # 4. Build dense 0-based index & verified MGP hub fixes
     # ------------------------------------------------------------------
     print("[4/6] Indexing global graph and applying verified MGP hub metadata...", flush=True)
     scholars: List[Dict[str, Any]] = []
@@ -812,6 +978,19 @@ SELECT ?p ?tLabel WHERE {
     for aq, sq in raw_edges:
         if aq in qid_data and sq in qid_data:
             qid_out_deg[aq] = qid_out_deg.get(aq, 0) + 1
+
+    def index_name_alias(idx: int, name_str: str) -> None:
+        nk = normalize_key(name_str)
+        if not nk:
+            return
+        lst = norm_to_indices.setdefault(nk, [])
+        if idx not in lst:
+            lst.append(idx)
+        toks = nk.split()
+        if len(toks) == 3 and len(toks[1]) == 1:
+            ml = first_last_mid1_to_indices.setdefault((toks[0], toks[2]), [])
+            if idx not in ml:
+                ml.append(idx)
 
     def add_scholar(
         name: str,
@@ -836,12 +1015,7 @@ SELECT ?p ?tLabel WHERE {
             qid_to_idx[qid] = idx
         if mgp:
             mgp_to_idx[mgp] = idx
-        nk = normalize_key(cleaned)
-        if nk:
-            norm_to_indices.setdefault(nk, []).append(idx)
-            toks = nk.split()
-            if len(toks) == 3 and len(toks[1]) == 1:
-                first_last_mid1_to_indices.setdefault((toks[0], toks[2]), []).append(idx)
+        index_name_alias(idx, cleaned)
         if thesis:
             theses_map[str(idx)] = _pack_thesis_tuple(
                 thesis, "MGP", mgp or qid,
@@ -896,6 +1070,9 @@ SELECT ?p ?tLabel WHERE {
                 cands = first_last_mid1_to_indices.get((toks[0], toks[1]), [])
             elif len(toks) == 3 and len(toks[1]) == 1:
                 cands = norm_to_indices.get(f"{toks[0]} {toks[2]}", [])
+            elif len(toks) == 3:
+                # Match Hispanic double surnames ("jose blanchet mancilla" -> "jose blanchet") or middle names ("terence chi shen tao" -> "terence tao")
+                cands = norm_to_indices.get(f"{toks[0]} {toks[1]}", []) or norm_to_indices.get(f"{toks[0]} {toks[2]}", [])
         if cands:
             chosen = cands[0]
             if univ and len(cands) > 1:
@@ -914,7 +1091,6 @@ SELECT ?p ?tLabel WHERE {
 
         return add_scholar(name, mgp=mgp, univ=univ, year=year, flag=flag)
 
-    # Verified MGP hub fixes (including Leonhard Euler -> Joseph-Louis Lagrange, restoring 105K+ descendants!)
     mgp_fixes = [
         ("17864", "Joseph-Louis Lagrange", "University of Turin", 0, "", [("38586", "Leonhard Euler")]),
         ("38586", "Leonhard Euler", "University of Basel", 1726, "Dissertatio physica de sono", [("53410", "Johann Bernoulli")]),
@@ -931,12 +1107,15 @@ SELECT ?p ?tLabel WHERE {
         ("275795", "Daniele Panozzo", "Università di Genova", 2012, "From Irregular Meshes to Structured Models", [("322238", "Enrico Puppo")]),
         ("168211", "Yotam Gingold", "New York University", 2009, "", [("69407", "Denis N. Zorin")]),
         ("69417", "Aaron Hertzmann", "New York University", 2001, "", [("69407", "Denis N. Zorin")]),
-        ("111539", "Lexing Ying", "New York University", 2004, "", [("69407", "Denis N. Zorin")]),
+        ("111539", "Lexing Ying", "New York University", 2004, "A Kernel-Independent Adaptive Fast Multipole Method in Two and Three Dimensions", [("69407", "Denis N. Zorin")]),
+        ("87045", "Jose Blanchet", "Stanford University", 2004, "", [("39913", "Peter W. Glynn")]),
         ("275772", "Hans-Christian Ebke", "RWTH Aachen University", 2017, "", [("275795", "Daniele Panozzo")]),
         ("294752", "Zachary Ferguson", "New York University", 2023, "", [("275795", "Daniele Panozzo")]),
     ]
     for mid, nm, univ, yr, th, advs in mgp_fixes:
         si = match_or_create(nm, mgp=mid, univ=univ, year=yr, flag=2)
+        scholars[si]["name"] = nm
+        index_name_alias(si, nm)
         if univ:
             scholars[si]["univ"] = univ
         if yr:
@@ -950,26 +1129,12 @@ SELECT ?p ?tLabel WHERE {
             if ai != si:
                 edge_set[(ai, si)] = 2
 
-    # Snapshot normalized keys of existing 400K scholars so UC eScholarship can auto-match ANY advisor in our graph!
     known_advisor_keys: Set[str] = set(norm_to_indices.keys())
 
     # ------------------------------------------------------------------
-    # 5. Parallel bulk harvest across 7 official doctoral dissertation repositories!
+    # 5. Parallel bulk harvest across 11 official doctoral dissertation repositories!
     # ------------------------------------------------------------------
-    print("[5/6] Parallel bulk harvesting official doctoral dissertations from 7 repositories...", flush=True)
-    harvested_theses: List[Dict[str, Any]] = []
-
-    def _run_mit_all() -> List[Dict[str, Any]]:
-        out: List[Dict[str, Any]] = []
-        for pg in range(12):
-            try:
-                recs = fetch_mit_math_theses("", limit=50, page=pg)
-                if not recs:
-                    break
-                out.extend(recs)
-            except Exception:
-                break
-        return out
+    print("[5/6] Parallel bulk harvesting from 11 official doctoral dissertation repositories...", flush=True)
 
     def _run_nyu_all() -> List[Dict[str, Any]]:
         out: List[Dict[str, Any]] = []
@@ -977,19 +1142,104 @@ SELECT ?p ?tLabel WHERE {
         out.extend(fetch_nyu_courant_phds("", limit=200, years=[2022, 2021, 2020, 2019, 2018, 2017, 2016], parse_pdf_when_missing_advisor=False))
         return out
 
+    def _run_mit_mega() -> List[Dict[str, Any]]:
+        return _harvest_dspace7_repo(
+            "https://dspace.mit.edu/server/api/discover/search/objects",
+            "MIT DSpace",
+            "Massachusetts Institute of Technology",
+            [
+                ('"Department of Mathematics" AND "Ph.D."', 18, {"f.itemtype": "Thesis,equals"}),
+                ('"Electrical Engineering and Computer Science" AND "Ph.D."', 35, {"f.itemtype": "Thesis,equals"}),
+                ('"Operations Research Center" AND "Ph.D."', 9, {"f.itemtype": "Thesis,equals"}),
+                ('"Department of Physics" AND "Ph.D."', 15, {"f.itemtype": "Thesis,equals"}),
+            ],
+            ["dc.contributor.advisor"],
+        )
+
+    def _run_gatech() -> List[Dict[str, Any]]:
+        return _harvest_dspace7_repo(
+            "https://repository.gatech.edu/server/api/discover/search/objects",
+            "Georgia Tech",
+            "Georgia Institute of Technology",
+            [
+                ("mathematics dissertation", 14, {}),
+                ('"computer science" dissertation', 16, {}),
+                ("statistics OR optimization dissertation", 8, {}),
+            ],
+            ["dc.contributor.advisor"],
+        )
+
+    def _run_vtech() -> List[Dict[str, Any]]:
+        return _harvest_dspace7_repo(
+            "https://vtechworks.lib.vt.edu/server/api/discover/search/objects",
+            "Virginia Tech",
+            "Virginia Tech",
+            [
+                ("mathematics dissertation", 10, {}),
+                ('"computer science" dissertation', 12, {}),
+                ("statistics dissertation", 8, {}),
+            ],
+            ["dc.contributor.committeechair", "dc.contributor.advisor"],
+        )
+
+    def _run_duke() -> List[Dict[str, Any]]:
+        return _harvest_dspace7_repo(
+            "https://dukespace.lib.duke.edu/server/api/discover/search/objects",
+            "DukeSpace",
+            "Duke University",
+            [
+                ("mathematics dissertation", 8, {}),
+                ('"computer science" dissertation', 8, {}),
+                ("statistics dissertation", 6, {}),
+            ],
+            ["dc.contributor.advisor"],
+        )
+
+    def _run_cornell() -> List[Dict[str, Any]]:
+        return _harvest_dspace7_repo(
+            "https://ecommons.cornell.edu/server/api/discover/search/objects",
+            "Cornell eCommons",
+            "Cornell University",
+            [
+                ("dissertation mathematics", 8, {}),
+                ('dissertation "computer science"', 8, {}),
+                ("dissertation statistics OR applied mathematics", 6, {}),
+            ],
+            ["dc.contributor.chair", "dc.contributor.advisor"],
+        )
+
+    def _run_epfl() -> List[Dict[str, Any]]:
+        return _harvest_dspace7_repo(
+            "https://infoscience.epfl.ch/server/api/discover/search/objects",
+            "EPFL Infoscience",
+            "École Polytechnique Fédérale de Lausanne",
+            [
+                ("epfl.legacy.itemtype:Theses AND mathematics", 14, {}),
+                ('epfl.legacy.itemtype:Theses AND "computer science"', 14, {}),
+                ("epfl.legacy.itemtype:Theses AND physics", 10, {}),
+            ],
+            ["dc.contributor.advisor"],
+            require_thesis_type=True,
+            url_builder=lambda h, item: f"https://infoscience.epfl.ch/entities/publication/{item.get('uuid') or h}",
+        )
+
     tasks = {
         "NYU Courant (2016-2026)": _run_nyu_all,
-        "HAL/TEL (ALL Math+CS+Stat)": lambda: _harvest_hal_bulk(max_docs=40000),
+        "HAL/TEL (ALL STEM PhDs ~90K)": lambda: _harvest_hal_bulk(max_docs=95000),
+        "DataCite (STEM+Cambridge+Oxford)": lambda: _harvest_datacite_mega(known_advisor_keys),
         "UC eScholarship (ALL 9 Campuses)": lambda: _harvest_uc_all(known_advisor_keys),
-        "DataCite (16K Math+CS Supervisors)": lambda: _harvest_datacite_bulk(max_pages=32, page_size=500),
-        "theses.fr (2016-2026 Math+CS)": _harvest_theses_fr_fast,
-        "MIT DSpace (Math PhDs)": _run_mit_all,
-        "Cornell eCommons (Math+CS PhDs)": lambda: _harvest_cornell_ecommons(max_pages=12, page_size=50),
+        "MIT DSpace (Math+EECS+ORC+Phys)": _run_mit_mega,
+        "Stanford SDR (purl.stanford.edu)": lambda: _harvest_stanford_sdr(known_advisor_keys, max_fetch=2400),
+        "Georgia Tech SMARTech": _run_gatech,
+        "Virginia Tech VTechWorks": _run_vtech,
+        "DukeSpace": _run_duke,
+        "Cornell eCommons": _run_cornell,
+        "EPFL Infoscience": _run_epfl,
     }
 
     t_harv = time.time()
     results_by_task: Dict[str, List[Dict[str, Any]]] = {}
-    with concurrent.futures.ThreadPoolExecutor(max_workers=7) as pool:
+    with concurrent.futures.ThreadPoolExecutor(max_workers=9) as pool:
         future_map = {pool.submit(fn): label for label, fn in tasks.items()}
         for fut in concurrent.futures.as_completed(future_map):
             label = future_map[fut]
@@ -1001,16 +1251,20 @@ SELECT ?p ?tLabel WHERE {
                 results_by_task[label] = []
                 print(f"      {label}: WARN {exc}", flush=True)
 
-    # Merge in priority order (PDF-rich repos first so PDF links win on duplicates!)
     merge_order = [
         "NYU Courant (2016-2026)",
-        "HAL/TEL (ALL Math+CS+Stat)",
+        "Stanford SDR (purl.stanford.edu)",
+        "MIT DSpace (Math+EECS+ORC+Phys)",
         "UC eScholarship (ALL 9 Campuses)",
-        "MIT DSpace (Math PhDs)",
-        "Cornell eCommons (Math+CS PhDs)",
-        "DataCite (16K Math+CS Supervisors)",
-        "theses.fr (2016-2026 Math+CS)",
+        "HAL/TEL (ALL STEM PhDs ~90K)",
+        "EPFL Infoscience",
+        "Georgia Tech SMARTech",
+        "DukeSpace",
+        "Cornell eCommons",
+        "Virginia Tech VTechWorks",
+        "DataCite (STEM+Cambridge+Oxford)",
     ]
+    harvested_theses: List[Dict[str, Any]] = []
     for label in merge_order:
         harvested_theses.extend(results_by_task.get(label, []))
 
@@ -1076,7 +1330,7 @@ SELECT ?p ?tLabel WHERE {
     )
 
     # ------------------------------------------------------------------
-    # 6. Export ultra-compact v3/v4 gzipped columnar bundles
+    # 6. Export ultra-compact gzipped columnar bundles
     # ------------------------------------------------------------------
     print("[6/6] Exporting ultra-compact gzipped columnar bundles...", flush=True)
     OUT_DIR.mkdir(parents=True, exist_ok=True)
@@ -1108,11 +1362,11 @@ SELECT ?p ?tLabel WHERE {
     featured_targets = [
         ("Leyi Zhu", None),
         ("Tianrui Dai", None),
+        ("Yiping Lu", None),
         ("Carl Friedrich Gauss", "18231"),
         ("Leonhard Euler", "38586"),
         ("David Hilbert", "7298"),
         ("Emmy Noether", "6967"),
-        ("Denis N. Zorin", "69407"),
         ("Pat Hanrahan", "70976"),
         ("Terence Tao", "43967"),
     ]
@@ -1184,16 +1438,15 @@ SELECT ?p ?tLabel WHERE {
     for rb in stats_summary["repo_breakdown"]:
         print(f"  - {rb['source_repo']}: {rb['count']:,}", flush=True)
 
-    # Sanity checks!
     for label, key, mgp in [
         ("Leyi Zhu", "leyi zhu", None),
         ("Tianrui Dai", "tianrui dai", None),
-        ("Yves Capdeboscq", "yves capdeboscq", "55821"),
+        ("Yiping Lu", "yiping lu", None),
+        ("Lexing Ying", "lexing ying", "111539"),
+        ("Jose Blanchet", "jose blanchet", "87045"),
         ("Terence Tao", "terence tao", "43967"),
         ("Leonhard Euler", "leonhard euler", "38586"),
         ("Pat Hanrahan", "pat hanrahan", "70976"),
-        ("Denis N. Zorin", "denis n zorin", "69407"),
-        ("Daniele Panozzo", "daniele panozzo", "275795"),
         ("Carl Friedrich Gauss", "carl friedrich gauss", "18231"),
     ]:
         idx = mgp_to_idx.get(mgp) if mgp else (norm_to_indices.get(key) or [None])[0]

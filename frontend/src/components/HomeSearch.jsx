@@ -140,11 +140,15 @@ export default function HomeSearch({ stats, onSelectScholar }) {
             }}
           >
             <option value="all">All Archives</option>
-            <option value="UC eScholarship">UC eScholarship (UCLA / Berkeley / UCSD / 9 UC)</option>
             <option value="HAL/TEL">HAL / TEL</option>
-            <option value="theses.fr">theses.fr</option>
-            <option value="DataCite">DataCite (Oxford / Cambridge / ETH / LMU)</option>
+            <option value="DataCite">DataCite (Cambridge / Oxford / ETH / LMU)</option>
+            <option value="UC eScholarship">UC eScholarship (UCLA / Berkeley / UCSD / 9 UC)</option>
             <option value="MIT DSpace">MIT DSpace</option>
+            <option value="Stanford SDR">Stanford Digital Repository</option>
+            <option value="Georgia Tech">Georgia Tech SMARTech</option>
+            <option value="EPFL Infoscience">EPFL Infoscience</option>
+            <option value="Virginia Tech">Virginia Tech VTechWorks</option>
+            <option value="DukeSpace">DukeSpace</option>
             <option value="Cornell eCommons">Cornell eCommons</option>
             <option value="NYU Courant">NYU Courant</option>
           </select>

@@ -228,10 +228,21 @@ function decodeThesis(st, idx) {
   if (!url && rid) {
     if (repo === "HAL/TEL") url = `https://theses.hal.science/${rid}`;
     else if (repo === "UC eScholarship") url = `https://escholarship.org/uc/item/${rid}`;
+    else if (repo === "Stanford SDR") url = `https://purl.stanford.edu/${rid}`;
     else if (repo === "theses.fr") url = `https://theses.fr/${rid}`;
     else if (repo === "DataCite") url = `https://doi.org/${rid}`;
-    else if (repo === "Cornell eCommons") url = `https://hdl.handle.net/${rid}`;
-    else if (repo === "MGP") url = `https://www.genealogy.math.ndsu.nodak.edu/id.php?id=${rid}`;
+    else if (repo === "EPFL Infoscience") url = `https://infoscience.epfl.ch/entities/publication/${rid}`;
+    else if (
+      repo === "MIT DSpace" ||
+      repo === "Cornell eCommons" ||
+      repo === "Georgia Tech" ||
+      repo === "Virginia Tech" ||
+      repo === "DukeSpace"
+    ) {
+      url = `https://hdl.handle.net/${rid}`;
+    } else if (repo === "MGP") {
+      url = `https://www.genealogy.math.ndsu.nodak.edu/id.php?id=${rid}`;
+    }
   }
   if (pdf === "1" && rid) {
     if (repo === "HAL/TEL") pdf = `https://theses.hal.science/${rid}/document`;

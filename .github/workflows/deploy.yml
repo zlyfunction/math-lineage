@@ -32,7 +32,7 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Build Ultra-Scale v4 Genealogy Dataset (7 Official Thesis Repos)
+      - name: Build Mega-Scale v5 Genealogy Dataset (11 Official Thesis Repos)
         run: |
           pip install pypdf
           python3 -u backend/scripts/build_full_scale.py
@@ -42,17 +42,16 @@ jobs:
           core = json.loads(gzip.open('frontend/public/data/core.json.gz', 'rb').read())
           edges = json.loads(gzip.open('frontend/public/data/edges.json.gz', 'rb').read())
           theses = json.loads(gzip.open('frontend/public/data/theses.json.gz', 'rb').read())
-          assert len(core['n']) > 450000, f'Too few scholars: {len(core[\"n\"])}'
-          assert len(edges['a']) > 460000, f'Too few edges: {len(edges[\"a\"])}'
-          assert len(theses['d']) > 60000, f'Too few theses: {len(theses[\"d\"])}'
+          assert len(core['n']) > 520000, f'Too few scholars: {len(core[\"n\"])}'
+          assert len(edges['a']) > 560000, f'Too few edges: {len(edges[\"a\"])}'
+          assert len(theses['d']) > 120000, f'Too few theses: {len(theses[\"d\"])}'
           names_lower = {x.lower() for x in core['n']}
-          for req in ['leyi zhu', 'tianrui dai', 'pat hanrahan']:
+          for req in ['leyi zhu', 'tianrui dai', 'yiping lu', 'pat hanrahan']:
               assert req in names_lower, f'Missing {req}'
           mgp_to_idx = {m: i for i, m in enumerate(core['m']) if m}
           stu = {}
           for a, s in zip(edges['a'], edges['s']):
               stu.setdefault(a, []).append(s)
-          # Verify Leonhard Euler -> Joseph-Louis Lagrange restored (>100,000 descendants)
           e_idx = mgp_to_idx['38586']
           vis, q = {e_idx}, deque([e_idx])
           while q:
@@ -61,10 +60,9 @@ jobs:
                   if nxt not in vis:
                       vis.add(nxt); q.append(nxt)
           assert len(vis) - 1 > 100000, f'Euler descendants too low: {len(vis)-1}'
-          # Verify Terence Tao gained UCLA students (>=22)
           t_idx = mgp_to_idx['43967']
-          assert len(stu.get(t_idx, [])) >= 22, f'Terence Tao students too low: {len(stu.get(t_idx, []))}'
-          print('CI v4 verified:', len(core['n']), 'scholars,', len(edges['a']), 'edges,', len(theses['d']), 'theses | Euler desc=', len(vis)-1, '| Tao stu=', len(stu.get(t_idx, [])))
+          assert len(stu.get(t_idx, [])) >= 25, f'Terence Tao students too low: {len(stu.get(t_idx, []))}'
+          print('CI v5 verified:', len(core['n']), 'scholars,', len(edges['a']), 'edges,', len(theses['d']), 'theses | Euler desc=', len(vis)-1, '| Tao stu=', len(stu.get(t_idx, [])))
           "
 
       - name: Setup Node
